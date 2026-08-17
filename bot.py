@@ -16,10 +16,6 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 JINA_API_KEY = os.getenv("JINA_API_KEY")
 PORT = int(os.getenv("PORT", 8080))
 
-# 頻道限制設定 (支援逗號分隔，例如: "懶人推書,小說推薦" 或填頻道 ID)
-# 若留空則預設「所有頻道」均可觸發
-ALLOWED_CHANNELS = os.getenv("ALLOWED_CHANNELS", "").strip()
-
 # Google 試算表設定
 GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 GOOGLE_SHEET_VIEW_URL = os.getenv(
@@ -53,26 +49,26 @@ async def start_web_server():
     print(f" Web 健康檢查端口已在 Port {PORT} 啟動")
 # -----------------------------------------------------------
 
-def is_channel_allowed(channel: discord.TextChannel) -> bool:
-    """檢查頻道是否在允許清單中"""
-    if not ALLOWED_CHANNELS:
-        return True  # 沒設定則代表允許全部頻道
-    allowed_list = [c.strip() for c in ALLOWED_CHANNELS.split(",") if c.strip()]
-    for allowed in allowed_list:
-        if allowed.isdigit() and int(allowed) == channel.id:
-            return True
-        if allowed.lower() in channel.name.lower():
-            return True
-    return False
-
-def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bool = True) -> discord.Embed:
+def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = "乾糧") -> discord.Embed:
     """組裝 Discord 小說 Embed 卡片"""
     info_lines = []
     
     if book_data.get("title_s"):
         info_lines.append(f"🔤 **簡體原名**：`{book_data['title_s']}`")
     
-    eval_text = "👍 推薦" if is_recommended else "⚠️ 不推薦"
+    if evaluation == "糧草":
+        eval_text = "🔥 強力推薦（糧草）"
+        author_text = f"由 {author.display_name} 強力推薦"
+        embed_color = discord.Color.from_rgb(230, 126, 34)  # 暖橙金
+    elif evaluation == "不推薦":
+        eval_text = "⚠️ 不推薦"
+        author_text = f"由 {author.display_name} 分享（⚠️ 不推薦）"
+        embed_color = discord.Color.from_rgb(149, 165, 166)  # 灰色
+    else:  # 乾糧（預設）
+        eval_text = "🌾 一般推薦（乾糧）"
+        author_text = f"由 {author.display_name} 一般推薦"
+        embed_color = discord.Color.from_rgb(52, 152, 219)  # 經典藍
+
     info_lines.append(f"📢 **分享人**：{author.mention} ｜ **評價**：**{eval_text}**")
     info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
     info_lines.append(f"🏷️ **標籤分類**：{book_data.get('tags', '作品標籤')}")
@@ -85,16 +81,11 @@ def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bo
     if len(description_text) > 4000:
         description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
 
-    if is_recommended:
-        author_text = f"由 {author.display_name} 推薦"
-    else:
-        author_text = f"由 {author.display_name} 分享（⚠️ 不推薦）"
-
     embed = discord.Embed(
         title=f"📖 [{book_data['platform']}] {book_data['title_t']}",
         url=book_data["url"],
         description=description_text,
-        color=discord.Color.from_rgb(52, 152, 219)
+        color=embed_color
     )
 
     embed.set_author(
@@ -115,7 +106,7 @@ class BookActionView(discord.ui.View):
         self.book_data = book_data
         self.original_author = original_author
         self.jump_url = jump_url
-        self.is_recommended = True
+        self.evaluation = "乾糧"  # 預設為一般推薦 (乾糧)
 
         if GOOGLE_SHEET_VIEW_URL:
             self.add_item(discord.ui.Button(
@@ -124,21 +115,28 @@ class BookActionView(discord.ui.View):
                 row=0
             ))
 
-    @discord.ui.button(label="👎 改為不推薦", style=discord.ButtonStyle.secondary, custom_id="toggle_eval_btn", row=0)
-    async def toggle_evaluation(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🔥 強力推薦", style=discord.ButtonStyle.primary, custom_id="toggle_tier_btn", row=0)
+    async def toggle_tier(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.original_author.id:
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以修改評價狀態喔！", ephemeral=True)
             return
 
-        self.is_recommended = not self.is_recommended
-        if self.is_recommended:
-            button.label = "👎 改為不推薦"
-            eval_status = "推薦"
+        if self.evaluation == "糧草":
+            self.evaluation = "乾糧"
+            button.label = "🔥 強力推薦"
+            button.style = discord.ButtonStyle.primary
         else:
-            button.label = "👍 改為推薦"
-            eval_status = "不推薦"
+            self.evaluation = "糧草"
+            button.label = "🌾 一般推薦"
+            button.style = discord.ButtonStyle.secondary
 
-        new_embed = build_book_embed(self.book_data, self.original_author, self.is_recommended)
+        # 若原先是不推薦狀態，重設「不推薦」按鈕標籤為「改為不推薦」
+        for child in self.children:
+            if getattr(child, "custom_id", None) == "toggle_eval_btn":
+                child.label = "👎 改為不推薦"
+                child.style = discord.ButtonStyle.secondary
+
+        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation)
         await interaction.response.edit_message(embed=new_embed, view=self)
 
         if GOOGLE_SHEET_WEBHOOK_URL:
@@ -147,7 +145,38 @@ class BookActionView(discord.ui.View):
                 self.book_data,
                 self.original_author.display_name,
                 self.jump_url,
-                status=eval_status
+                status=self.evaluation
+            )
+
+    @discord.ui.button(label="👎 改為不推薦", style=discord.ButtonStyle.secondary, custom_id="toggle_eval_btn", row=0)
+    async def toggle_evaluation(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.original_author.id:
+            await interaction.response.send_message("❌ 只有發布此網址的原作者才可以修改評價狀態喔！", ephemeral=True)
+            return
+
+        if self.evaluation != "不推薦":
+            self.evaluation = "不推薦"
+            button.label = "👍 恢復推薦"
+            button.style = discord.ButtonStyle.success
+        else:
+            tier_btn = next((c for c in self.children if getattr(c, "custom_id", None) == "toggle_tier_btn"), None)
+            if tier_btn and tier_btn.label == "🌾 一般推薦":
+                self.evaluation = "糧草"
+            else:
+                self.evaluation = "乾糧"
+            button.label = "👎 改為不推薦"
+            button.style = discord.ButtonStyle.secondary
+
+        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation)
+        await interaction.response.edit_message(embed=new_embed, view=self)
+
+        if GOOGLE_SHEET_WEBHOOK_URL:
+            await sync_to_google_sheet(
+                GOOGLE_SHEET_WEBHOOK_URL,
+                self.book_data,
+                self.original_author.display_name,
+                self.jump_url,
+                status=self.evaluation
             )
 
     @discord.ui.button(label="🗑️ 刪除書卡", style=discord.ButtonStyle.danger, custom_id="delete_card_btn", row=0)
@@ -164,10 +193,7 @@ async def on_ready():
     print(f" 小說解析機器人已成功上線！")
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
-    if ALLOWED_CHANNELS:
-        print(f" 限制頻道：已鎖定在 [{ALLOWED_CHANNELS}]")
-    else:
-        print(f" 限制頻道：未限制 (所有文字頻道均可觸發)")
+    print(f" 監聽範圍：所有文字頻道均可觸發")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
 
@@ -225,7 +251,7 @@ async def scan_history_command(ctx: commands.Context, limit: int = 100):
                         book_data,
                         msg.author.display_name,
                         msg.jump_url,
-                        status="推薦"
+                        status="乾糧"
                     )
                 # 微量延遲避免觸發 API 頻率限制
                 await asyncio.sleep(1)
@@ -246,10 +272,6 @@ async def on_message(message: discord.Message):
     # 先處理指令 (如 !掃描歷史)
     await bot.process_commands(message)
 
-    # 檢查是否在允許的頻道清單中
-    if isinstance(message.channel, discord.TextChannel) and not is_channel_allowed(message.channel):
-        return
-
     content = message.content.strip()
     if not content or content.startswith("!"):
         return
@@ -262,9 +284,21 @@ async def on_message(message: discord.Message):
     platform, norm_url, book_id = norm_result
     history_key = f"{platform}:{book_id}"
 
-    # 2. 檢查是否已被推薦過 (賽博獵犬提醒)
+    # 2. 檢查是否已被推薦過 (賽博獵犬提醒：不顯示書卡，僅顯示前人討論跳轉連結)
     prev_record = recommend_history.get(history_key)
-    hound_text = None
+    if prev_record:
+        first_user = prev_record.get("author_name", "群友")
+        first_url = prev_record.get("jump_url", "")
+        if first_url:
+            hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～ 🔗 [點擊查看前人推薦訊息]({first_url})"
+        else:
+            hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～"
+
+        await message.reply(
+            content=hound_text,
+            mention_author=False
+        )
+        return
 
     # 3. 取得書籍資料
     book_data = cache.get(history_key)
@@ -274,32 +308,22 @@ async def on_message(message: discord.Message):
             if book_data:
                 cache[history_key] = book_data
 
-    # 4. 發送書卡與賽博獵犬提醒
+    # 4. 發送書卡 (首次推薦，預設評級為「乾糧」)
     if book_data:
-        if prev_record:
-            first_user = prev_record.get("author_name", "群友")
-            first_url = prev_record.get("jump_url", "")
-            if first_url:
-                hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～ 🔗 [點擊查看前人推薦訊息]({first_url})"
-            else:
-                hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～"
-
-        embed_reply = build_book_embed(book_data, message.author, is_recommended=True)
+        embed_reply = build_book_embed(book_data, message.author, evaluation="乾糧")
         view = BookActionView(book_data, message.author, jump_url=message.jump_url)
 
         sent_msg = await message.reply(
-            content=hound_text,
             embed=embed_reply,
             view=view,
             mention_author=False
         )
         view.jump_url = sent_msg.jump_url
 
-        if not prev_record:
-            recommend_history[history_key] = {
-                "author_name": message.author.display_name,
-                "jump_url": sent_msg.jump_url
-            }
+        recommend_history[history_key] = {
+            "author_name": message.author.display_name,
+            "jump_url": sent_msg.jump_url
+        }
 
         # 自動同步寫入 Google 試算表 (自動去重)
         if GOOGLE_SHEET_WEBHOOK_URL:
@@ -308,7 +332,7 @@ async def on_message(message: discord.Message):
                 book_data,
                 message.author.display_name,
                 sent_msg.jump_url,
-                status="推薦"
+                status="乾糧"
             )
 
 async def main():

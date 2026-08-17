@@ -132,7 +132,7 @@ async def process_channel_history(target_channel: discord.TextChannel):
                             book_data,
                             msg.author.display_name,
                             msg.jump_url,
-                            status="推薦"
+                            status="乾糧"
                         )
                         print(f"   -> ✅ 已成功同步至 Google 試算表！")
 
