@@ -16,15 +16,19 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 JINA_API_KEY = os.getenv("JINA_API_KEY")
 PORT = int(os.getenv("PORT", 8080))
 
-# Google 試算表設定 (若無設定環境變數則使用預設試算表)
+# Google 試算表設定
 GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 GOOGLE_SHEET_VIEW_URL = os.getenv(
     "GOOGLE_SHEET_VIEW_URL",
     "https://docs.google.com/spreadsheets/d/13COcdiJUUFApMDVBbBTf0wY2utr9gGjW12gio43Awqc/edit?gid=0#gid=0"
 )
 
-# 初始化快取 (最多快取 200 本書，有效期 10 分鐘)
-cache = TTLCache(maxsize=200, ttl=600)
+# 快取 (最多快取 300 本書，有效期 1 小時)
+cache = TTLCache(maxsize=300, ttl=3600)
+
+# 推薦歷史庫 (用來記錄誰是第一個推薦者與原訊息連結，達成賽博獵犬提醒)
+# 格式: { "qidian:1049370328": { "author_name": "小明", "jump_url": "https://..." } }
+recommend_history = {}
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -98,7 +102,6 @@ class BookActionView(discord.ui.View):
         self.jump_url = jump_url
         self.is_recommended = True
 
-        # 線上書單按鈕 (必顯示)
         if GOOGLE_SHEET_VIEW_URL:
             self.add_item(discord.ui.Button(
                 label="📊 查看線上書單",
@@ -146,10 +149,7 @@ async def on_ready():
     print(f" 小說解析機器人已成功上線！")
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
-    print(f" 簡介模式：100% 完整簡介顯示 (Embed Description 模式)")
-    print(f" 線上書單：{GOOGLE_SHEET_VIEW_URL}")
-    if GOOGLE_SHEET_WEBHOOK_URL:
-        print(f" Google 試算表 Webhook：已配置")
+    print(f" 重複提醒：賽博獵犬偵測已啟用")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
 
@@ -162,28 +162,59 @@ async def on_message(message: discord.Message):
     if not content:
         return
 
+    # 1. 網址正規化與平台識別
     norm_result = await normalize_novel_url(content)
     if not norm_result:
         await bot.process_commands(message)
         return
 
     platform, norm_url, book_id = norm_result
+    history_key = f"{platform}:{book_id}"
 
-    cache_key = f"{platform}:{book_id}"
-    book_data = cache.get(cache_key)
+    # 2. 檢查是否已被推薦過 (賽博獵犬提醒機制)
+    prev_record = recommend_history.get(history_key)
+    hound_text = None
+
+    # 3. 取得書籍資料 (優先從快取取得)
+    book_data = cache.get(history_key)
 
     if not book_data:
         async with message.channel.typing():
             book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
             if book_data:
-                cache[cache_key] = book_data
+                cache[history_key] = book_data
 
+    # 4. 發送書卡與賽博獵犬提醒
     if book_data:
+        # 如果之前有人推薦過，組裝賽博獵犬提醒文字
+        if prev_record:
+            first_user = prev_record.get("author_name", "群友")
+            first_url = prev_record.get("jump_url", "")
+            if first_url:
+                hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～ 🔗 [點擊查看前人推薦訊息]({first_url})"
+            else:
+                hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～"
+
         embed_reply = build_book_embed(book_data, message.author, is_recommended=True)
         view = BookActionView(book_data, message.author, jump_url=message.jump_url)
-        sent_msg = await message.reply(embed=embed_reply, view=view, mention_author=False)
+
+        # 回覆訊息 (若有重複則附帶賽博獵犬提醒文字)
+        sent_msg = await message.reply(
+            content=hound_text,
+            embed=embed_reply,
+            view=view,
+            mention_author=False
+        )
         view.jump_url = sent_msg.jump_url
 
+        # 如果是第一次推薦，記錄到歷史庫中
+        if not prev_record:
+            recommend_history[history_key] = {
+                "author_name": message.author.display_name,
+                "jump_url": sent_msg.jump_url
+            }
+
+        # 自動同步寫入 Google 試算表
         if GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
                 GOOGLE_SHEET_WEBHOOK_URL,
