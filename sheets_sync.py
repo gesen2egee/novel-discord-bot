@@ -2,15 +2,15 @@ import aiohttp
 from datetime import datetime
 from typing import Optional
 
-async def sync_to_google_sheet(webhook_url: str, book_data: dict, recommender_name: str) -> bool:
+async def sync_to_google_sheet(webhook_url: str, book_data: dict, recommender_name: str, message_jump_url: str = "") -> bool:
     """
     透過 Google Apps Script Webhook 將推書資訊自動新增至 Google 試算表。
-    免 GCP 複雜設定、零門檻快速寫入。
+    包含：時間、繁體書名、簡體原名、推薦人、平台、作者、字數、標籤、小說網址、Discord討論連結。
     """
     if not webhook_url:
         return False
 
-    # 取得當前時間 (台北時間 / UTC+8)
+    # 取得當前時間
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     payload = {
@@ -22,7 +22,8 @@ async def sync_to_google_sheet(webhook_url: str, book_data: dict, recommender_na
         "author": book_data.get("author", ""),
         "stats": book_data.get("stats", ""),
         "tags": book_data.get("tags", ""),
-        "url": book_data.get("url", "")
+        "url": book_data.get("url", ""),
+        "jump_url": message_jump_url
     }
 
     try:

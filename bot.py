@@ -77,7 +77,7 @@ async def on_ready():
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
     print(f" 簡介模式：100% 完整簡介顯示 (Embed Description 模式)")
     if GOOGLE_SHEET_WEBHOOK_URL:
-        print(f" Google 試算表同步：已啟用")
+        print(f" Google 試算表同步：已啟用 (含 Discord 討論跳轉連結)")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
 
@@ -112,11 +112,12 @@ async def on_message(message: discord.Message):
     if book_data:
         # A. 原頻道回覆 Embed 書卡
         embed_reply = build_book_embed(book_data, message.author)
-        await message.reply(embed=embed_reply, mention_author=False)
+        sent_msg = await message.reply(embed=embed_reply, mention_author=False)
 
-        # B. 自動同步寫入 Google 試算表 (若有設定 Webhook)
+        # B. 自動同步寫入 Google 試算表 (帶上 Discord 討論訊息跳轉連結)
         if GOOGLE_SHEET_WEBHOOK_URL:
-            await sync_to_google_sheet(GOOGLE_SHEET_WEBHOOK_URL, book_data, message.author.display_name)
+            jump_url = sent_msg.jump_url if sent_msg else message.jump_url
+            await sync_to_google_sheet(GOOGLE_SHEET_WEBHOOK_URL, book_data, message.author.display_name, jump_url)
 
     await bot.process_commands(message)
 

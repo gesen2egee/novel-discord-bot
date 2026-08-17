@@ -1,6 +1,6 @@
 # 📖 Discord 小說網址自動解析機器人
 
-專為繁體中文 Discord 小說社群打造的網址解析機器人。當頻道中有成員發送 **起點中文網**、**番茄小說**、**刺蝟貓** 的小說連結時，機器人會自動辨識並在當前頻道回覆包含 **推薦人、繁簡雙書名、作者、字數/數據、標籤分類、100% 完整簡介與官方高解析封面** 的精美 Embed 卡片，並可選**自動同步寫入 Google 試算表 (Google Sheets)** 建立專屬雲端書單！
+專為繁體中文 Discord 小說社群打造的網址解析機器人。當頻道中有成員發送 **起點中文網**、**番茄小說**、**刺蝟貓** 的小說連結時，機器人會自動辨識並在當前頻道回覆包含 **推薦人、繁簡雙書名、作者、字數/數據、標籤分類、100% 完整簡介與官方高解析封面** 的精美 Embed 卡片，並可選**自動同步寫入 Google 試算表 (Google Sheets)**（含直接跳轉回 Discord 的討論連結）！
 
 ---
 
@@ -8,8 +8,8 @@
 
 1. **完全免本機爬蟲**：採用雲端 Jina Reader 引擎，免安裝動態瀏覽器、免維護 DOM/HTML 規則，徹底解決 IP 封鎖與起點字型加密混淆問題。
 2. **自動同步 Google 試算表 (Google Sheets)**：
-   - 每次推書自動在 Google 表格新增一行（時間、繁體書名、簡體原名、推薦人、平台、作者、字數、標籤、網址）。
-   - 隨時用手機或電腦點開表格就能檢索、篩選、排序全群推薦書單！
+   - 每次推書自動在 Google 表格新增一行（時間、繁體書名、簡體原名、推薦人、平台、作者、字數、標籤、小說網址、**Discord 討論連結**）。
+   - 群友在試算表中點擊「討論連結」，就能**瞬間跳轉回 Discord 當時推薦的那個頻道與訊息**！
 3. **網址自動正規化**：
    - 起點：無論手機版、電腦版、App 分享長網址，一律正規化為 `https://www.qidian.com/book/{id}/`
    - 番茄：暢讀分享、zlink 短鏈一律正規化為 `https://fanqienovel.com/page/{id}`；保留 keyword 落地頁
@@ -30,8 +30,8 @@
 
 ### 步驟 1：建立 Google 試算表
 1. 打開 [Google 試算表 (sheets.new)](https://sheets.new/) 建立新表格。
-2. 在第 1 列依序填入欄位標題：
-   `推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `推薦人` ｜ `平台` ｜ `作者` ｜ `字數/數據` ｜ `標籤` ｜ `小說網址`
+2. 在第 1 列依序填入 10 個欄位標題：
+   `推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `推薦人` ｜ `平台` ｜ `作者` ｜ `字數/數據` ｜ `標籤` ｜ `小說網址` ｜ `Discord 討論連結`
 
 ### 步驟 2：貼上 Google Apps Script 腳本
 1. 點擊頂部選單的 **「擴充功能」 $\rightarrow$ 「Apps Script」**。
@@ -43,7 +43,7 @@ function doPost(e) {
     var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
     var data = JSON.parse(e.postData.contents);
     
-    // 將推書資料寫入新的一列
+    // 將推書資料寫入新的一列 (包含 Discord 討論連結)
     sheet.appendRow([
       data.time,
       data.title_t,
@@ -53,7 +53,8 @@ function doPost(e) {
       data.author,
       data.stats,
       data.tags,
-      data.url
+      data.url,
+      data.jump_url
     ]);
     
     return ContentService.createTextOutput(JSON.stringify({"status": "success"}))
@@ -74,23 +75,25 @@ function doPost(e) {
    - 誰可以存取：**`所有人 (Anyone)`**
 4. 點擊 **「部署」** 並授權帳號。
 5. 複製產生的 **網頁應用程式網址 (Web app URL)**。
-6. 在 Zeabur 的環境變數中新增：
+6. 在雲端託管平台（Render / 伺服器）的環境變數中新增：
    - 變數名稱：`GOOGLE_SHEET_WEBHOOK_URL`
    - 變數值：貼上剛複製的 Web app URL
 
 ---
 
-## ☁️ 雲端 24 小時免開機架設教學 (以 Zeabur 為例)
+## ☁️ 雲端 24 小時免開機架設教學 (以 Render 免費平台為例)
 
 1. **取得 Discord Bot Token**：至 [Discord Developer Portal](https://discord.com/developers/applications) 取得 Token，並開啟 `MESSAGE CONTENT INTENT`。
 2. **推送代碼至 GitHub**：
    ```bash
    git push -u origin main
    ```
-3. **在 Zeabur 一鍵部署**：
-   - 登入 [Zeabur (zeabur.com)](https://zeabur.com/)，選擇部署你的 `gesen2egee/novel-discord-bot` 倉庫。
-   - 在服務的「變數 (Variables)」填入 `DISCORD_TOKEN`（以及選填的 `GOOGLE_SHEET_WEBHOOK_URL`）。
-   - 機器人即刻 24 小時自動在線！
+3. **在 Render 建立免費服務**：
+   - 登入 [Render (render.com)](https://render.com/)，點擊 **New +** $\rightarrow$ **Background Worker** (或 Web Service)。
+   - 連接你的 GitHub 倉庫 `gesen2egee/novel-discord-bot`。
+   - 選擇 **Free** 免費方案。
+   - 在「Environment Variables」新增 `DISCORD_TOKEN`（以及選填的 `GOOGLE_SHEET_WEBHOOK_URL`）。
+   - 點擊 **Create**，機器人即刻 24 小時在線！
 
 ---
 
@@ -100,9 +103,9 @@ function doPost(e) {
 ├── bot.py           # Discord 機器人主程式 (監聽、推薦人、卡片排版)
 ├── normalizer.py    # 網址正規化模組 (正則辨識、短網址還原、排除單章)
 ├── resolver.py      # 雲端小說解析模組 (串接 Jina Reader API、繁簡轉換)
-├── sheets_sync.py   # Google 試算表自動同步模組 (Webhook 寫入)
+├── sheets_sync.py   # Google 試算表自動同步模組 (含討論連結)
 ├── requirements.txt # Python 依賴清單
-├── Dockerfile       # Zeabur / 雲端容器部署設定檔
+├── Dockerfile       # 容器部署設定檔
 ├── Procfile         # 雲端背景服務定義檔
 ├── .dockerignore    # 容器構建過濾規則
 ├── .env.example     # 環境變數範本
