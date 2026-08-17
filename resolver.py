@@ -27,56 +27,33 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
-def clean_and_format_tags(raw_text: str) -> str:
+def clean_tags(raw_text: str) -> str:
     """
-    清理並格式化標籤：
-    1. 支援保留合法的 Markdown 連結 [分類名](https://...)，並將標籤文字轉為繁體，同時保持網址純淨。
-    2. 支援純文字標籤（如 連載、簽約、VIP 等）。
-    3. 徹底濾除截斷或未閉合的破損網址（如 (https://www.qidian... 等雜訊）。
-    4. 統一以「・」美化分隔。
+    純淨標籤清洗：
+    1. 將 [標籤名](url) 提取為乾淨純文字「標籤名」
+    2. 移除所有殘留網址、括號、引號等雜訊
+    3. 全自動轉換為繁體中文，並以「・」美化排列
     """
     if not raw_text:
         return "作品標籤"
-
-    # 使用 placeholder 暫存合法的 Markdown 連結
-    link_map = {}
-    def replace_link(match):
-        label = match.group(1).strip()
-        url = match.group(2).strip()
-        label_t = s2t_converter.convert(label)
-        placeholder = f"__MDLINK{len(link_map)}__"
-        link_map[placeholder] = f"[{label_t}]({url})"
-        return f" {placeholder} "
-
-    # 1. 替換完整合法的 Markdown 連結 (支援帶有 "title" 的情況，將 title 丟棄)
-    text = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)\"\']+)(?:\s+[^)]*)?\)', replace_link, raw_text)
-
-    # 2. 徹底過濾所有不完整或殘留的 http/https 網址
+    # 提取 Markdown 連結文字
+    text = re.sub(r'\[([^\]]+)\]\([^\)]*\)?', r'\1', raw_text)
+    # 過濾所有殘留 URL
     text = re.sub(r'\(?https?://[^\s\)]*\)?', '', text)
-
-    # 3. 移除多餘符號（包含引號、括號等）
+    # 過濾多餘符號
     text = re.sub(r'[\[\]\(\)\{\}*#`"\'“”‘’]', ' ', text)
-
-    # 4. 依照分隔符分割
     raw_items = re.split(r'[·•|｜,，/、\s]+', text)
 
     valid_tags = []
     for item in raw_items:
         item = item.strip(" -·•|/，,")
-        if not item:
+        if not item or item.isdigit() or len(item) > 15:
             continue
-        if item in link_map:
-            valid_tags.append(link_map[item])
-        else:
-            if len(item) > 15:
-                continue
-            if item.isdigit():
-                continue
-            if any(bad in item.lower() for bad in ['http', 'www', 'qidian', 'fanqie', 'ciweimao', '.com', 'html', 'chapter', '正文卷', '免费试读', '加入书架']):
-                continue
-            item_t = s2t_converter.convert(item)
-            if item_t not in valid_tags:
-                valid_tags.append(item_t)
+        if any(bad in item.lower() for bad in ['http', 'www', 'qidian', 'fanqie', 'ciweimao', '.com', 'html', 'chapter', '正文卷', '免费试读', '加入书架', '作品信息', '在线阅读']):
+            continue
+        item_t = s2t_converter.convert(item)
+        if item_t not in valid_tags:
+            valid_tags.append(item_t)
 
     return "・".join(valid_tags) if valid_tags else "作品標籤"
 
@@ -159,7 +136,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
 
                     tag_line = re.search(r'(?:^|\n)((?:连载中?|完本|已完结|连载|签约|VIP|免费)[·\s]+[^\n\r]+)', content)
                     if tag_line:
-                        tags = clean_and_format_tags(tag_line.group(1))
+                        tags = clean_tags(tag_line.group(1))
                     else:
                         tags = "連載・作品推薦"
 
@@ -205,7 +182,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
 
                     tag_m = re.search(r'(?:连载中|完结|已完结)\s+([^\n\r]+?)(?=\s*\[|\s*\n|\s*\d+章)', content)
                     if tag_m:
-                        tags = clean_and_format_tags(tag_m.group(1))
+                        tags = clean_tags(tag_m.group(1))
                     else:
                         tags = "都市・穿越・連載中"
 
@@ -250,7 +227,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if tag_extra and tag_extra.group(1) not in tag_list:
                         tag_list.insert(0, tag_extra.group(1))
                     if tag_list:
-                        tags = clean_and_format_tags("・".join(tag_list))
+                        tags = clean_tags("・".join(tag_list))
                     else:
                         tags = "宅文・歷史軍事・連載中"
 
