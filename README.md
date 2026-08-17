@@ -37,10 +37,10 @@
 ## 📊 Google 試算表自動同步設定教學
 
 ### 步驟 1：建立 Google 試算表
-在第 1 列依序填入 11 個欄位標題：
-`推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `推薦人` ｜ `平台` ｜ `作者` ｜ `小說網址` ｜ `DC討論原文` ｜ `是否推薦` ｜ `字數/數據` ｜ `標籤`
+在第 1 列依序填入 12 個欄位標題：
+`推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `推薦人` ｜ `平台` ｜ `作者` ｜ `小說網址` ｜ `DC討論原文` ｜ `是否推薦` ｜ `字數/數據` ｜ `標籤` ｜ `覆議`
 
-### 步驟 2：貼上 Google Apps Script 腳本 (最新欄位順序與去重)
+### 步驟 2：貼上 Google Apps Script 腳本 (支援覆議與社群同推)
 1. 點擊頂部選單的 **「擴充功能」 $\rightarrow$ 「Apps Script」**。
 2. 清空裡面的程式碼，完整貼上以下腳本：
 
@@ -78,9 +78,14 @@ function doPost(e) {
       sheet.getRange(existingRowIndex, 1).setValue(data.time); // 更新為最新時間
       sheet.getRange(existingRowIndex, 4).setValue(currentRecommenders);
       sheet.getRange(existingRowIndex, 8).setValue(data.jump_url); // 第 8 欄: DC討論原文
-      sheet.getRange(existingRowIndex, 9).setValue(data.evaluation || "推薦"); // 第 9 欄: 是否推薦
+      if (data.evaluation) {
+        sheet.getRange(existingRowIndex, 9).setValue(data.evaluation); // 第 9 欄: 是否推薦
+      }
       sheet.getRange(existingRowIndex, 10).setValue(data.stats); // 第 10 欄: 字數/數據
       sheet.getRange(existingRowIndex, 11).setValue(data.tags);  // 第 11 欄: 標籤
+      if (data.concurrence !== undefined) {
+        sheet.getRange(existingRowIndex, 12).setValue(data.concurrence); // 第 12 欄: 覆議
+      }
       
       return ContentService.createTextOutput(JSON.stringify({"status": "updated", "row": existingRowIndex}))
         .setMimeType(ContentService.MimeType.JSON);
@@ -101,9 +106,10 @@ function doPost(e) {
       data.author || "",
       data.url || "",
       data.jump_url || "",
-      data.evaluation || "推薦",
+      data.evaluation || "乾糧",
       data.stats || "",
-      data.tags || ""
+      data.tags || "",
+      data.concurrence || ""
     ];
     
     sheet.getRange(targetRow, 1, 1, newRowData.length).setValues([newRowData]);

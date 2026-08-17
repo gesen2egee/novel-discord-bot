@@ -11,7 +11,8 @@ async def sync_to_google_sheet(
     book_data: dict,
     recommender_name: str,
     message_jump_url: str = "",
-    status: str = "推薦"
+    status: str = "推薦",
+    concurrence: str = ""
 ) -> bool:
     """
     透過 Google Apps Script Webhook 將小說資訊與評價同步至 Google 試算表。
@@ -35,7 +36,8 @@ async def sync_to_google_sheet(
         "tags": book_data.get("tags", ""),
         "url": book_data.get("url", ""),
         "jump_url": message_jump_url,
-        "evaluation": status
+        "evaluation": status,
+        "concurrence": concurrence
     }
 
     try:

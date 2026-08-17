@@ -34,7 +34,7 @@ GOOGLE_SHEET_VIEW_URL = os.getenv(
 # 快取 (最多快取 300 本書，有效期 1 小時)
 cache = TTLCache(maxsize=300, ttl=3600)
 
-# 推薦歷史庫 (格式: { "qidian:1049370328": { "author_name": "小明", "jump_url": "https://..." } })
+# 推薦歷史庫 (格式: { "qidian:1049370328": { "author_name": "小明", "jump_url": "https://...", "upvoters": ["小華"], "downvoters": [] } })
 recommend_history = {}
 
 intents = discord.Intents.default()
@@ -60,7 +60,7 @@ async def start_web_server():
 async def load_history_from_google_sheet() -> int:
     """
     從 Google 試算表公開檢視連結下載並載入歷史推薦資料至 recommend_history。
-    確保賽博獵犬能 100% 依據 Google 試算表上的記錄判定。
+    確保賽博獵犬與社群覆議能 100% 依據 Google 試算表上的記錄判定。
     """
     if not GOOGLE_SHEET_VIEW_URL or "docs.google.com/spreadsheets" not in GOOGLE_SHEET_VIEW_URL:
         return 0
@@ -86,13 +86,28 @@ async def load_history_from_google_sheet() -> int:
                     if not rows:
                         return 0
 
-                    # 欄位定義: 推薦時間(0) | 繁體書名(1) | 簡體原名(2) | 推薦人(3) | 平台(4) | 作者(5) | 小說網址(6) | DC討論原文(7) | 是否推薦(8)
+                    # 欄位定義: 推薦時間(0) | 繁體書名(1) | 簡體原名(2) | 推薦人(3) | 平台(4) | 作者(5) | 小說網址(6) | DC討論原文(7) | 是否推薦(8) | 數據(9) | 標籤(10) | 覆議(11)
                     for row in rows[1:]:
                         if len(row) <= 6:
                             continue
                         novel_url = row[6].strip()
                         recommender = row[3].strip() if len(row) > 3 else "群友"
                         jump_url = row[7].strip() if len(row) > 7 else ""
+                        eval_val = row[8].strip() if len(row) > 8 else "乾糧"
+                        concurrence_val = row[11].strip() if len(row) > 11 else ""
+
+                        # 解析現有覆議名單
+                        upvoters = []
+                        downvoters = []
+                        if concurrence_val:
+                            parts = [p.strip() for p in concurrence_val.split("｜") if p.strip()]
+                            for part in parts:
+                                if "同推" in part:
+                                    names = part.replace("同推", "").strip().split(",")
+                                    upvoters.extend([n.strip() for n in names if n.strip()])
+                                elif "不推" in part:
+                                    names = part.replace("不推", "").strip().split(",")
+                                    downvoters.extend([n.strip() for n in names if n.strip()])
 
                         if novel_url:
                             norm_res = await normalize_novel_url(novel_url)
@@ -101,10 +116,13 @@ async def load_history_from_google_sheet() -> int:
                                 history_key = f"{platform}:{book_id}"
                                 recommend_history[history_key] = {
                                     "author_name": recommender,
-                                    "jump_url": jump_url
+                                    "jump_url": jump_url,
+                                    "evaluation": eval_val,
+                                    "upvoters": upvoters,
+                                    "downvoters": downvoters
                                 }
                                 count += 1
-                    print(f"📊 [Google Sheets] 成功載入 {count} 本歷史小說至賽博獵犬庫！")
+                    print(f"📊 [Google Sheets] 成功載入 {count} 本歷史小說與覆議資料至賽博獵犬庫！")
                 else:
                     print(f"⚠️ [Google Sheets] 無法直接讀取試算表 CSV (HTTP {resp.status})，請確認試算表共用權限設為「任何知道連結的使用者均可檢視」。")
     except Exception as e:
@@ -146,8 +164,20 @@ def is_sync_channel(channel) -> bool:
                     return True
     return False
 
-def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = "乾糧", is_sync_channel: bool = True) -> discord.Embed:
-    """組裝 Discord 小說 Embed 卡片"""
+def build_book_embed(
+    book_data: dict,
+    author: discord.Member,
+    evaluation: str = "乾糧",
+    is_sync_channel: bool = True,
+    upvoters: list = None,
+    downvoters: list = None
+) -> discord.Embed:
+    """組裝 Discord 小說 Embed 卡片（支援覆議名單展示）"""
+    if upvoters is None:
+        upvoters = []
+    if downvoters is None:
+        downvoters = []
+
     info_lines = []
     
     if book_data.get("title_s"):
@@ -179,6 +209,13 @@ def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = 
 
     info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
     info_lines.append(f"🏷️ **標籤分類**：{book_data.get('tags', '作品標籤')}")
+
+    # 展示社群覆議 (同推 / 不推)
+    if upvoters:
+        info_lines.append(f"👥 **同推**：{', '.join(upvoters)}")
+    if downvoters:
+        info_lines.append(f"🚫 **不推**：{', '.join(downvoters)}")
+
     info_lines.append("")
     info_lines.append("📝 **完整作品簡介**：")
     info_lines.append(book_data.get("description", "暫無簡介"))
@@ -207,14 +244,24 @@ def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = 
     return embed
 
 class BookActionView(discord.ui.View):
-    """卡片互動按鈕"""
-    def __init__(self, book_data: dict, original_author: discord.Member, jump_url: str = "", should_sync: bool = False):
+    """卡片互動按鈕 (支援原作者評價與社群覆議)"""
+    def __init__(
+        self,
+        book_data: dict,
+        original_author: discord.Member,
+        jump_url: str = "",
+        should_sync: bool = False,
+        upvoters: list = None,
+        downvoters: list = None
+    ):
         super().__init__(timeout=None)
         self.book_data = book_data
         self.original_author = original_author
         self.jump_url = jump_url
         self.should_sync = should_sync
         self.evaluation = "乾糧"  # 預設為一般推薦 (乾糧)
+        self.upvoters = upvoters if upvoters is not None else []
+        self.downvoters = downvoters if downvoters is not None else []
 
         if not self.should_sync:
             # 在其他頻道 (非推書頻道)，僅保留「線上書單」與「刪除書卡」兩個按鈕
@@ -228,29 +275,72 @@ class BookActionView(discord.ui.View):
                 row=0
             ))
 
+    def get_concurrence_text(self) -> str:
+        """組裝試算表覆議欄位文字 (以最後狀態覆蓋)"""
+        parts = []
+        if self.upvoters:
+            parts.append(f"{', '.join(self.upvoters)} 同推")
+        if self.downvoters:
+            parts.append(f"{', '.join(self.downvoters)} 不推")
+        return " ｜ ".join(parts)
+
     @discord.ui.button(label="🔥 強力推薦", style=discord.ButtonStyle.primary, custom_id="toggle_tier_btn", row=0)
     async def toggle_tier(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.original_author.id:
-            await interaction.response.send_message("❌ 只有發布此網址的原作者才可以修改評價狀態喔！", ephemeral=True)
+        user_name = interaction.user.display_name
+
+        # 1. 若為原發文者：切換主推薦評級 (糧草 <-> 乾糧)
+        if interaction.user.id == self.original_author.id:
+            if self.evaluation == "糧草":
+                self.evaluation = "乾糧"
+                button.label = "🔥 強力推薦"
+                button.style = discord.ButtonStyle.primary
+            else:
+                self.evaluation = "糧草"
+                button.label = "🌾 一般推薦"
+                button.style = discord.ButtonStyle.secondary
+
+            for child in self.children:
+                if getattr(child, "custom_id", None) == "toggle_eval_btn":
+                    child.label = "👎 改為不推薦"
+                    child.style = discord.ButtonStyle.secondary
+
+            new_embed = build_book_embed(
+                self.book_data,
+                self.original_author,
+                self.evaluation,
+                is_sync_channel=self.should_sync,
+                upvoters=self.upvoters,
+                downvoters=self.downvoters
+            )
+            await interaction.response.edit_message(embed=new_embed, view=self)
+
+            if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
+                await sync_to_google_sheet(
+                    GOOGLE_SHEET_WEBHOOK_URL,
+                    self.book_data,
+                    self.original_author.display_name,
+                    self.jump_url,
+                    status=self.evaluation,
+                    concurrence=self.get_concurrence_text()
+                )
             return
 
-        if self.evaluation == "糧草":
-            self.evaluation = "乾糧"
-            button.label = "🔥 強力推薦"
-            button.style = discord.ButtonStyle.primary
-        else:
-            self.evaluation = "糧草"
-            button.label = "🌾 一般推薦"
-            button.style = discord.ButtonStyle.secondary
+        # 2. 若為其他群友：覆議為「同推」(以最後狀態覆蓋)
+        if user_name in self.downvoters:
+            self.downvoters.remove(user_name)
+        if user_name not in self.upvoters:
+            self.upvoters.append(user_name)
 
-        # 若原先是不推薦狀態，重設「不推薦」按鈕標籤為「改為不推薦」
-        for child in self.children:
-            if getattr(child, "custom_id", None) == "toggle_eval_btn":
-                child.label = "👎 改為不推薦"
-                child.style = discord.ButtonStyle.secondary
-
-        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation, is_sync_channel=self.should_sync)
+        new_embed = build_book_embed(
+            self.book_data,
+            self.original_author,
+            self.evaluation,
+            is_sync_channel=self.should_sync,
+            upvoters=self.upvoters,
+            downvoters=self.downvoters
+        )
         await interaction.response.edit_message(embed=new_embed, view=self)
+        await interaction.followup.send(f"✅ 您已成功加入《{self.book_data.get('title_t', '')}》的「同推」覆議！", ephemeral=True)
 
         if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
@@ -258,30 +348,66 @@ class BookActionView(discord.ui.View):
                 self.book_data,
                 self.original_author.display_name,
                 self.jump_url,
-                status=self.evaluation
+                status=self.evaluation,
+                concurrence=self.get_concurrence_text()
             )
 
     @discord.ui.button(label="👎 改為不推薦", style=discord.ButtonStyle.secondary, custom_id="toggle_eval_btn", row=0)
     async def toggle_evaluation(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if interaction.user.id != self.original_author.id:
-            await interaction.response.send_message("❌ 只有發布此網址的原作者才可以修改評價狀態喔！", ephemeral=True)
+        user_name = interaction.user.display_name
+
+        # 1. 若為原發文者：切換為不推薦 / 恢復推薦
+        if interaction.user.id == self.original_author.id:
+            if self.evaluation != "不推薦":
+                self.evaluation = "不推薦"
+                button.label = "👍 恢復推薦"
+                button.style = discord.ButtonStyle.success
+            else:
+                tier_btn = next((c for c in self.children if getattr(c, "custom_id", None) == "toggle_tier_btn"), None)
+                if tier_btn and tier_btn.label == "🌾 一般推薦":
+                    self.evaluation = "糧草"
+                else:
+                    self.evaluation = "乾糧"
+                button.label = "👎 改為不推薦"
+                button.style = discord.ButtonStyle.secondary
+
+            new_embed = build_book_embed(
+                self.book_data,
+                self.original_author,
+                self.evaluation,
+                is_sync_channel=self.should_sync,
+                upvoters=self.upvoters,
+                downvoters=self.downvoters
+            )
+            await interaction.response.edit_message(embed=new_embed, view=self)
+
+            if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
+                await sync_to_google_sheet(
+                    GOOGLE_SHEET_WEBHOOK_URL,
+                    self.book_data,
+                    self.original_author.display_name,
+                    self.jump_url,
+                    status=self.evaluation,
+                    concurrence=self.get_concurrence_text()
+                )
             return
 
-        if self.evaluation != "不推薦":
-            self.evaluation = "不推薦"
-            button.label = "👍 恢復推薦"
-            button.style = discord.ButtonStyle.success
-        else:
-            tier_btn = next((c for c in self.children if getattr(c, "custom_id", None) == "toggle_tier_btn"), None)
-            if tier_btn and tier_btn.label == "🌾 一般推薦":
-                self.evaluation = "糧草"
-            else:
-                self.evaluation = "乾糧"
-            button.label = "👎 改為不推薦"
-            button.style = discord.ButtonStyle.secondary
+        # 2. 若為其他群友：覆議為「不推」(以最後狀態覆蓋)
+        if user_name in self.upvoters:
+            self.upvoters.remove(user_name)
+        if user_name not in self.downvoters:
+            self.downvoters.append(user_name)
 
-        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation, is_sync_channel=self.should_sync)
+        new_embed = build_book_embed(
+            self.book_data,
+            self.original_author,
+            self.evaluation,
+            is_sync_channel=self.should_sync,
+            upvoters=self.upvoters,
+            downvoters=self.downvoters
+        )
         await interaction.response.edit_message(embed=new_embed, view=self)
+        await interaction.followup.send(f"⚠️ 您已成功加入《{self.book_data.get('title_t', '')}》的「不推」覆議！", ephemeral=True)
 
         if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
@@ -289,16 +415,17 @@ class BookActionView(discord.ui.View):
                 self.book_data,
                 self.original_author.display_name,
                 self.jump_url,
-                status=self.evaluation
+                status=self.evaluation,
+                concurrence=self.get_concurrence_text()
             )
 
     @discord.ui.button(label="🗑️ 刪除書卡", style=discord.ButtonStyle.danger, custom_id="delete_card_btn", row=0)
     async def delete_card(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # 僅原發文者有權刪除書卡
         if interaction.user.id != self.original_author.id:
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以刪除這張書卡喔！", ephemeral=True)
             return
 
-        # 僅刪除 Discord 書卡訊息，保持不影響 Google 試算表紀錄
         await interaction.message.delete()
 
 class CyberHoundView(discord.ui.View):
@@ -397,7 +524,10 @@ async def scan_history_command(ctx: commands.Context, limit: int = 100):
                 if history_key not in recommend_history:
                     recommend_history[history_key] = {
                         "author_name": msg.author.display_name,
-                        "jump_url": msg.jump_url
+                        "jump_url": msg.jump_url,
+                        "evaluation": "乾糧",
+                        "upvoters": [],
+                        "downvoters": []
                     }
                 # 同步寫入 Google 試算表 (自動去重)
                 if GOOGLE_SHEET_WEBHOOK_URL:
@@ -447,10 +577,20 @@ async def on_message(message: discord.Message):
     if should_sync and prev_record:
         first_user = prev_record.get("author_name", "群友")
         first_url = prev_record.get("jump_url", "")
+        hound_user = message.author.display_name
+
+        # 賽博獵犬算進同推 (以最後狀態覆蓋)
+        upvoters = prev_record.setdefault("upvoters", [])
+        downvoters = prev_record.setdefault("downvoters", [])
+        if hound_user in downvoters:
+            downvoters.remove(hound_user)
+        if hound_user not in upvoters and hound_user != first_user:
+            upvoters.append(hound_user)
+
         if first_url:
-            hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～ 🔗 [點擊查看前人推薦訊息]({first_url})"
+            hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～（已將您計入同推名單） 🔗 [點擊查看前人推薦訊息]({first_url})"
         else:
-            hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～"
+            hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～（已將您計入同推名單）"
 
         hound_view = CyberHoundView(original_author=message.author)
         await message.reply(
@@ -458,6 +598,31 @@ async def on_message(message: discord.Message):
             view=hound_view,
             mention_author=False
         )
+
+        # 同步更新表單的同推覆議
+        if GOOGLE_SHEET_WEBHOOK_URL:
+            parts = []
+            if upvoters:
+                parts.append(f"{', '.join(upvoters)} 同推")
+            if downvoters:
+                parts.append(f"{', '.join(downvoters)} 不推")
+            concurrence_str = " ｜ ".join(parts)
+
+            book_data = cache.get(history_key)
+            if not book_data:
+                book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
+                if book_data:
+                    cache[history_key] = book_data
+
+            if book_data:
+                await sync_to_google_sheet(
+                    GOOGLE_SHEET_WEBHOOK_URL,
+                    book_data,
+                    first_user,
+                    first_url,
+                    status=prev_record.get("evaluation", "乾糧"),
+                    concurrence=concurrence_str
+                )
         return
 
     # 3. 取得書籍資料
@@ -484,7 +649,10 @@ async def on_message(message: discord.Message):
         if should_sync:
             recommend_history[history_key] = {
                 "author_name": message.author.display_name,
-                "jump_url": sent_msg.jump_url
+                "jump_url": sent_msg.jump_url,
+                "evaluation": "乾糧",
+                "upvoters": [],
+                "downvoters": []
             }
 
             if GOOGLE_SHEET_WEBHOOK_URL:
