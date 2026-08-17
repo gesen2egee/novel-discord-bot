@@ -16,6 +16,10 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 JINA_API_KEY = os.getenv("JINA_API_KEY")
 PORT = int(os.getenv("PORT", 8080))
 
+# 頻道限制設定 (支援逗號分隔，例如: "懶人推書,小說推薦" 或填頻道 ID)
+# 若留空則預設「所有頻道」均可觸發
+ALLOWED_CHANNELS = os.getenv("ALLOWED_CHANNELS", "").strip()
+
 # Google 試算表設定
 GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 GOOGLE_SHEET_VIEW_URL = os.getenv(
@@ -26,8 +30,7 @@ GOOGLE_SHEET_VIEW_URL = os.getenv(
 # 快取 (最多快取 300 本書，有效期 1 小時)
 cache = TTLCache(maxsize=300, ttl=3600)
 
-# 推薦歷史庫 (用來記錄誰是第一個推薦者與原訊息連結，達成賽博獵犬提醒)
-# 格式: { "qidian:1049370328": { "author_name": "小明", "jump_url": "https://..." } }
+# 推薦歷史庫 (格式: { "qidian:1049370328": { "author_name": "小明", "jump_url": "https://..." } })
 recommend_history = {}
 
 intents = discord.Intents.default()
@@ -47,8 +50,20 @@ async def start_web_server():
     await runner.setup()
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
-    print(f" Web 健康檢查端口已在 Port {PORT} 啟動 (支援 Render 免費 Web Service)")
+    print(f" Web 健康檢查端口已在 Port {PORT} 啟動")
 # -----------------------------------------------------------
+
+def is_channel_allowed(channel: discord.TextChannel) -> bool:
+    """檢查頻道是否在允許清單中"""
+    if not ALLOWED_CHANNELS:
+        return True  # 沒設定則代表允許全部頻道
+    allowed_list = [c.strip() for c in ALLOWED_CHANNELS.split(",") if c.strip()]
+    for allowed in allowed_list:
+        if allowed.isdigit() and int(allowed) == channel.id:
+            return True
+        if allowed.lower() in channel.name.lower():
+            return True
+    return False
 
 def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bool = True) -> discord.Embed:
     """組裝 Discord 小說 Embed 卡片"""
@@ -149,35 +164,110 @@ async def on_ready():
     print(f" 小說解析機器人已成功上線！")
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
-    print(f" 重複提醒：賽博獵犬偵測已啟用")
+    if ALLOWED_CHANNELS:
+        print(f" 限制頻道：已鎖定在 [{ALLOWED_CHANNELS}]")
+    else:
+        print(f" 限制頻道：未限制 (所有文字頻道均可觸發)")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
+
+# ----------------- 管理員回溯歷史舊文章指令 -----------------
+@bot.command(name="掃描歷史", aliases=["scan", "backfill"])
+@commands.has_permissions(administrator=True)
+async def scan_history_command(ctx: commands.Context, limit: int = 100):
+    """
+    管理員指令：掃描當前頻道過去的歷史訊息，自動將舊的小說網址錄入 Google 試算表與書庫。
+    使用方式：!掃描歷史 100
+    """
+    if limit > 500:
+        await ctx.reply("⚠️ 為避免 Discord 速率限制，單次歷史掃描上限為 500 則訊息。")
+        limit = 500
+
+    status_msg = await ctx.reply(f"🔍 開始掃描 **#{ctx.channel.name}** 過去 **{limit}** 則歷史訊息中的小說分享...")
+    
+    found_count = 0
+    scanned_total = 0
+
+    # 由舊到新讀取歷史訊息
+    async for msg in ctx.channel.history(limit=limit, oldest_first=True):
+        if msg.id == status_msg.id or msg.author.bot:
+            continue
+
+        scanned_total += 1
+        content = msg.content.strip()
+        if not content:
+            continue
+
+        norm_result = await normalize_novel_url(content)
+        if norm_result:
+            platform, norm_url, book_id = norm_result
+            history_key = f"{platform}:{book_id}"
+
+            # 抓取小說資料
+            book_data = cache.get(history_key)
+            if not book_data:
+                book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
+                if book_data:
+                    cache[history_key] = book_data
+
+            if book_data:
+                found_count += 1
+                # 記錄到獵犬庫
+                if history_key not in recommend_history:
+                    recommend_history[history_key] = {
+                        "author_name": msg.author.display_name,
+                        "jump_url": msg.jump_url
+                    }
+                # 同步寫入 Google 試算表 (自動去重)
+                if GOOGLE_SHEET_WEBHOOK_URL:
+                    await sync_to_google_sheet(
+                        GOOGLE_SHEET_WEBHOOK_URL,
+                        book_data,
+                        msg.author.display_name,
+                        msg.jump_url,
+                        status="推薦"
+                    )
+                # 微量延遲避免觸發 API 頻率限制
+                await asyncio.sleep(1)
+
+    await status_msg.edit(content=f"🎉 **歷史掃描完成！**\n共掃描 **{scanned_total}** 則訊息，成功錄入 **{found_count}** 本小說至 Google 試算表與書庫！")
+
+@scan_history_command.error
+async def scan_history_error(ctx: commands.Context, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.reply("❌ 此歷史回溯指令只有**伺服器管理員**可以使用喔！")
+# -----------------------------------------------------------
 
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
+    # 先處理指令 (如 !掃描歷史)
+    await bot.process_commands(message)
+
+    # 檢查是否在允許的頻道清單中
+    if isinstance(message.channel, discord.TextChannel) and not is_channel_allowed(message.channel):
+        return
+
     content = message.content.strip()
-    if not content:
+    if not content or content.startswith("!"):
         return
 
     # 1. 網址正規化與平台識別
     norm_result = await normalize_novel_url(content)
     if not norm_result:
-        await bot.process_commands(message)
         return
 
     platform, norm_url, book_id = norm_result
     history_key = f"{platform}:{book_id}"
 
-    # 2. 檢查是否已被推薦過 (賽博獵犬提醒機制)
+    # 2. 檢查是否已被推薦過 (賽博獵犬提醒)
     prev_record = recommend_history.get(history_key)
     hound_text = None
 
-    # 3. 取得書籍資料 (優先從快取取得)
+    # 3. 取得書籍資料
     book_data = cache.get(history_key)
-
     if not book_data:
         async with message.channel.typing():
             book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
@@ -186,7 +276,6 @@ async def on_message(message: discord.Message):
 
     # 4. 發送書卡與賽博獵犬提醒
     if book_data:
-        # 如果之前有人推薦過，組裝賽博獵犬提醒文字
         if prev_record:
             first_user = prev_record.get("author_name", "群友")
             first_url = prev_record.get("jump_url", "")
@@ -198,7 +287,6 @@ async def on_message(message: discord.Message):
         embed_reply = build_book_embed(book_data, message.author, is_recommended=True)
         view = BookActionView(book_data, message.author, jump_url=message.jump_url)
 
-        # 回覆訊息 (若有重複則附帶賽博獵犬提醒文字)
         sent_msg = await message.reply(
             content=hound_text,
             embed=embed_reply,
@@ -207,14 +295,13 @@ async def on_message(message: discord.Message):
         )
         view.jump_url = sent_msg.jump_url
 
-        # 如果是第一次推薦，記錄到歷史庫中
         if not prev_record:
             recommend_history[history_key] = {
                 "author_name": message.author.display_name,
                 "jump_url": sent_msg.jump_url
             }
 
-        # 自動同步寫入 Google 試算表
+        # 自動同步寫入 Google 試算表 (自動去重)
         if GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
                 GOOGLE_SHEET_WEBHOOK_URL,
@@ -223,8 +310,6 @@ async def on_message(message: discord.Message):
                 sent_msg.jump_url,
                 status="推薦"
             )
-
-    await bot.process_commands(message)
 
 async def main():
     if not DISCORD_TOKEN or DISCORD_TOKEN == "YOUR_DISCORD_BOT_TOKEN_HERE":
