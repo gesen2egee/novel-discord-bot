@@ -6,7 +6,7 @@ import asyncio
 import aiohttp
 from aiohttp import web
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from cachetools import TTLCache
 
@@ -299,6 +299,15 @@ class CyberHoundView(discord.ui.View):
 
         await interaction.message.delete()
 
+@tasks.loop(seconds=60)
+async def auto_sync_sheet_task():
+    """背景每 60 秒自動同步一次 Google 試算表最新推書資料"""
+    await load_history_from_google_sheet()
+
+@auto_sync_sheet_task.before_loop
+async def before_auto_sync():
+    await bot.wait_until_ready()
+
 @bot.event
 async def on_ready():
     print(f"==================================================")
@@ -311,6 +320,10 @@ async def on_ready():
     
     # 啟動時自動從 Google 試算表載入歷史資料至獵犬庫
     await load_history_from_google_sheet()
+
+    # 啟動背景定期每分鐘同步 Google 試算表任務
+    if not auto_sync_sheet_task.is_running():
+        auto_sync_sheet_task.start()
     
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
 
