@@ -8,9 +8,15 @@ from datetime import timezone, timedelta
 import discord
 from dotenv import load_dotenv
 
+from normalizer import normalize_novel_url
+from resolver import fetch_novel_info
+from sheets_sync import sync_to_google_sheet
+
 # 載入 .env 設定
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
+JINA_API_KEY = os.getenv("JINA_API_KEY")
+GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 
 # 設定台北時間 (UTC+8)
 TAIPEI_TZ = timezone(timedelta(hours=8))
@@ -40,156 +46,174 @@ def sanitize_filename(filename: str) -> str:
         filename = filename.replace(ch, "_")
     return filename
 
+async def process_channel_history(target_channel: discord.TextChannel):
+    """
+    抓取頻道全部歷史訊息：
+    1. 下載所有文字、發文者、時間、討論跳轉連結與圖片。
+    2. 自動分析所有起點/番茄/刺蝟貓小說網址，並同步寫入 Google 試算表 (自動去重)。
+    """
+    print(f"\n🚀 開始抓取頻道 【#{target_channel.name}】 的全部歷史訊息...")
+    print("------------------------------------------------------")
+
+    # 建立輸出資料夾
+    folder_name = sanitize_filename(f"{target_channel.name}_{target_channel.id}")
+    output_dir = os.path.join("exports", folder_name)
+    images_dir = os.path.join(output_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
+
+    messages_data = []
+    novel_records = []
+    scanned_count = 0
+    novel_count = 0
+
+    timeout = aiohttp.ClientTimeout(total=30)
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        # 由舊到新遍歷全部訊息 (limit=None 代表全部)
+        async for msg in target_channel.history(limit=None, oldest_first=True):
+            if msg.author.bot:
+                continue
+
+            scanned_count += 1
+            taipei_time = msg.created_at.astimezone(TAIPEI_TZ)
+            time_str = taipei_time.strftime("%Y/%m/%d %H:%M:%S")
+            date_only_str = taipei_time.strftime("%Y/%m/%d")
+
+            # 處理附件/圖片下載
+            attachments_info = []
+            for att in msg.attachments:
+                safe_name = sanitize_filename(att.filename)
+                filename = f"{msg.id}_{safe_name}"
+                filepath = os.path.join(images_dir, filename)
+                
+                # 下載圖片
+                await download_attachment(session, att.url, filepath)
+                attachments_info.append({
+                    "filename": att.filename,
+                    "local_path": filepath,
+                    "url": att.url
+                })
+
+            # 記錄訊息資訊
+            msg_info = {
+                "id": str(msg.id),
+                "jump_url": msg.jump_url,
+                "time": time_str,
+                "author_name": msg.author.display_name,
+                "author_id": str(msg.author.id),
+                "content": msg.content,
+                "attachments_count": len(attachments_info),
+                "attachments": attachments_info
+            }
+            messages_data.append(msg_info)
+
+            # 檢查是否含有小說網址
+            content = msg.content.strip()
+            norm_result = await normalize_novel_url(content)
+            if norm_result:
+                platform, norm_url, book_id = norm_result
+                print(f"\n📖 [發現小說] {platform} ({book_id}) | 推薦人: {msg.author.display_name} | 時間: {date_only_str}")
+                
+                # 解析書籍詳細資料
+                book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
+                if book_data:
+                    novel_count += 1
+                    novel_records.append({
+                        "book_data": book_data,
+                        "recommender": msg.author.display_name,
+                        "jump_url": msg.jump_url,
+                        "date": date_only_str
+                    })
+                    print(f"   -> 書名: 《{book_data['title_t']}》 | 作者: {book_data['author']} | 字數: {book_data['stats']}")
+
+                    # 同步寫入 Google 試算表
+                    if GOOGLE_SHEET_WEBHOOK_URL:
+                        await sync_to_google_sheet(
+                            GOOGLE_SHEET_WEBHOOK_URL,
+                            book_data,
+                            msg.author.display_name,
+                            msg.jump_url,
+                            status="推薦"
+                        )
+                        print(f"   -> ✅ 已成功同步至 Google 試算表！")
+
+            # 即時進度顯示
+            if scanned_count % 20 == 0:
+                print(f"⏳ 已掃描 {scanned_count} 則訊息... (已識別 {novel_count} 本小說)", end="\r")
+
+    print(f"\n\n======================================================")
+    print(f"🎉 抓取與分析完成！")
+    print(f"📊 總掃描訊息數：{scanned_count} 則")
+    print(f"📚 成功提取並同步小說數：{novel_count} 本")
+    print(f"======================================================")
+
+    # 1. 輸出 JSON 檔案
+    json_path = os.path.join(output_dir, "messages.json")
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(messages_data, f, ensure_ascii=False, indent=2)
+
+    # 2. 輸出 CSV 檔案 (Excel 可直接開)
+    csv_path = os.path.join(output_dir, "messages.csv")
+    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["訊息ID", "發送時間(台北)", "發送者暱稱", "發送者ID", "文字內容", "討論跳轉連結", "圖片數量"])
+        for m in messages_data:
+            writer.writerow([
+                m["id"],
+                m["time"],
+                m["author_name"],
+                m["author_id"],
+                m["content"],
+                m["jump_url"],
+                m["attachments_count"]
+            ])
+
+    print(f"📁 歷史訊息 CSV 已儲存至：{csv_path}")
+    print(f"📁 歷史訊息 JSON 已儲存至：{json_path}")
+    print(f"🖼️ 歷史截圖圖片已下載至：{images_dir}")
+
 async def interactive_export():
-    """互動式頻道選擇與匯出邏輯"""
+    """互動式頻道選擇"""
     print("\n" + "=" * 50)
-    print(" 📢 Discord 頻道歷史訊息與圖片匯出工具")
+    print(" 📢 Discord 頻道歷史推書全量抓取與表單同步工具")
     print("=" * 50)
     
-    # 列出所有可存取的文字頻道
     channels_map = {}
-    print("\n可用的伺服器與頻道清單：")
+    print("\n可存取的伺服器與頻道清單：")
     for guild in client.guilds:
-        print(f"\n📁 伺服器：【{guild.name}】 (ID: {guild.id})")
+        print(f"\n📁 伺服器：【{guild.name}】")
         for channel in guild.text_channels:
             perms = channel.permissions_for(guild.me)
             if perms.read_messages and perms.read_message_history:
                 channels_map[channel.id] = channel
                 print(f"   💬 #{channel.name} (ID: {channel.id})")
-            else:
-                print(f"   🔒 #{channel.name} (無存取或讀取歷史權限)")
+
+    if not channels_map:
+        print("\n[錯誤] 機器人目前沒有任何可讀取的文字頻道權限。")
+        await client.close()
+        return
 
     print("\n" + "-" * 50)
-    target_id_str = input("請輸入欲爬取的【頻道 ID】（直接按 Enter 結束）: ").strip()
-    if not target_id_str:
-        print("已取消操作。")
+    user_input = input("👉 請輸入要抓取分析的「頻道 ID」（直接複製上方括號內的數字）: ").strip()
+
+    if not user_input.isdigit() or int(user_input) not in channels_map:
+        print("\n[錯誤] 輸入的頻道 ID 無效或機器人無權限存取。")
         await client.close()
         return
 
-    try:
-        target_id = int(target_id_str)
-    except ValueError:
-        print("[錯誤] 頻道 ID 格式不正確，請輸入純數字！")
-        await client.close()
-        return
-
-    target_channel = client.get_channel(target_id)
-    if not target_channel:
-        try:
-            target_channel = await client.fetch_channel(target_id)
-        except Exception:
-            target_channel = None
-
-    if not target_channel or not isinstance(target_channel, discord.TextChannel):
-        print(f"[錯誤] 找不到頻道 ID {target_id} 或該頻道不是文字頻道，請確認機器人是否在該伺服器且有權限！")
-        await client.close()
-        return
-
-    # 建立輸出資料夾
-    folder_name = sanitize_filename(f"{target_channel.name}_{target_channel.id}")
-    export_dir = os.path.join(os.getcwd(), "exports", folder_name)
-    images_dir = os.path.join(export_dir, "images")
-    os.makedirs(images_dir, exist_ok=True)
-
-    print(f"\n[開始爬取] 目標頻道: #{target_channel.name}")
-    print(f"[儲存路徑] {export_dir}")
-    print("正在抓取訊息與下載圖片，請稍候...\n")
-
-    messages_list = []
-    total_messages = 0
-    total_attachments = 0
-
-    async with aiohttp.ClientSession() as session:
-        # oldest_first=True: 由舊到新爬取
-        async for msg in target_channel.history(limit=None, oldest_first=True):
-            total_messages += 1
-
-            # 處理時間 (轉換成台灣時間 UTC+8)
-            msg_time = msg.created_at.astimezone(TAIPEI_TZ).strftime("%Y-%m-%d %H:%M:%S")
-
-            # 處理附件 (圖片/影片/檔案)
-            att_records = []
-            att_filenames = []
-            for att in msg.attachments:
-                total_attachments += 1
-                safe_name = sanitize_filename(f"{msg.id}_{att.filename}")
-                local_path = os.path.join(images_dir, safe_name)
-                
-                # 下載附件
-                download_success = await download_attachment(session, att.url, local_path)
-                att_filenames.append(safe_name if download_success else f"[下載失敗]_{safe_name}")
-
-                att_records.append({
-                    "filename": att.filename,
-                    "saved_file": safe_name if download_success else None,
-                    "url": att.url,
-                    "size_bytes": att.size,
-                    "content_type": att.content_type
-                })
-
-            msg_data = {
-                "id": str(msg.id),
-                "author_display_name": msg.author.display_name,
-                "author_username": msg.author.name,
-                "author_id": str(msg.author.id),
-                "timestamp": msg_time,
-                "content": msg.content,
-                "attachments": att_records,
-                "attachments_count": len(att_records),
-                "jump_url": msg.jump_url
-            }
-            messages_list.append(msg_data)
-
-            # 即時進度輸出
-            if total_messages % 50 == 0:
-                print(f" ⏳ 已爬取 {total_messages:5d} 則訊息 ｜ 已下載 {total_attachments:4d} 個附件/圖片...", end="\r", flush=True)
-
-    print(f"\n\n✅ 爬取完成！共處理 {total_messages} 則訊息、下載 {total_attachments} 個附件。")
-
-    # 1. 寫入 JSON 檔案
-    json_path = os.path.join(export_dir, "messages.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(messages_list, f, ensure_ascii=False, indent=2)
-
-    # 2. 寫入 CSV 檔案 (UTF-8 with BOM，方便 Excel 直接點開不亂碼)
-    csv_path = os.path.join(export_dir, "messages.csv")
-    with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["訊息ID", "發送時間 (UTC+8)", "發送者暱稱", "帳號名稱", "使用者ID", "文字內容", "附件圖片清單", "訊息連結"])
-        for m in messages_list:
-            att_str = " ; ".join([a["saved_file"] or a["url"] for a in m["attachments"]])
-            writer.writerow([
-                m["id"],
-                m["timestamp"],
-                m["author_display_name"],
-                m["author_username"],
-                m["author_id"],
-                m["content"],
-                att_str,
-                m["jump_url"]
-            ])
-
-    print("=" * 50)
-    print(f" 📄 JSON 資料檔 : {json_path}")
-    print(f" 📊 CSV 試算表  : {csv_path}")
-    print(f" 🖼️ 圖片資料夾  : {images_dir}")
-    print("=" * 50)
-
+    target_channel = channels_map[int(user_input)]
+    await process_channel_history(target_channel)
     await client.close()
 
 @client.event
 async def on_ready():
-    print(f"機器人已登入為: {client.user.name} ({client.user.id})")
+    print(f"機器人登入成功：{client.user.name}")
     await interactive_export()
 
-if __name__ == "__main__":
+def main():
     if not DISCORD_TOKEN or DISCORD_TOKEN == "YOUR_DISCORD_BOT_TOKEN_HERE":
         print("[錯誤] 請先在 .env 檔案中設定您的 DISCORD_TOKEN！")
-        sys.exit(1)
-    
-    try:
-        client.run(DISCORD_TOKEN)
-    except KeyboardInterrupt:
-        print("\n程式已被使用者中止。")
-    except Exception as e:
-        print(f"\n[錯誤] 執行失敗: {e}")
+        return
+    client.run(DISCORD_TOKEN)
+
+if __name__ == "__main__":
+    main()
