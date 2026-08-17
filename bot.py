@@ -52,7 +52,6 @@ async def on_message(message: discord.Message):
     book_data = cache.get(cache_key)
 
     if not book_data:
-        # 提示正在解析中 (可選打字狀態)
         async with message.channel.typing():
             book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
             if book_data:
@@ -66,13 +65,21 @@ async def on_message(message: discord.Message):
             color=discord.Color.from_rgb(52, 152, 219)
         )
 
-        # 雙行書名：顯示簡體原名（方便複製搜尋）
+        # 頂部顯示推薦人姓名與頭像
+        embed.set_author(
+            name=f"由 {message.author.display_name} 推薦",
+            icon_url=message.author.display_avatar.url
+        )
+
+        # 雙行書名：第二行顯示簡體原名（方便複製搜尋）
         if book_data.get("title_s"):
             embed.add_field(name="🔤 簡體原名", value=f"`{book_data['title_s']}`", inline=False)
 
-        # 作者與統計數據
+        # 推薦人、作者與統計數據
+        embed.add_field(name="📢 推薦人", value=message.author.mention, inline=True)
         embed.add_field(name="👤 作者", value=book_data.get("author", "未知"), inline=True)
         embed.add_field(name="📊 字數 / 數據", value=book_data.get("stats", "詳見官網"), inline=True)
+
         embed.add_field(name="🏷️ 標籤分類", value=book_data.get("tags", "作品標籤"), inline=False)
 
         # 完整簡介 (不截斷)
@@ -82,7 +89,7 @@ async def on_message(message: discord.Message):
         if book_data.get("cover"):
             embed.set_thumbnail(url=book_data["cover"])
 
-        embed.set_footer(text="小說資訊自動解析 Bot ｜ 點擊標題直接前往書籍頁面")
+        embed.set_footer(text="小說資訊自動解析 ｜ 點擊標題直接前往書籍頁面")
 
         await message.reply(embed=embed, mention_author=False)
 
