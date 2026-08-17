@@ -152,11 +152,16 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if word_match:
                         stats = word_match.group(1).replace("_", "").strip()
 
-                    tag_line = re.search(r'((?:連載|完本|連載中|签约|VIP|轻小说|玄幻|都市|仙侠|科幻|游戏|历史|奇幻|诸天|同人|\[.+?\])(?:[·\s]+(?:\[.+?\]|[^\n\r]+))+)', content)
+                    tag_line = re.search(r'(?:^|\n)((?:连载中?|完本|已完结|连载|签约|VIP|免费)[·\s]+[^\n\r]+)', content)
                     if tag_line:
                         tags = clean_and_format_tags(tag_line.group(1))
                     else:
-                        tags = "輕小說・連載・VIP"
+                        # 備援：若無連載狀態標記，抓取頂部分類導航
+                        nav_match = re.search(r'\[首页\]\(https://www\.qidian\.com/\)[^\n]*', content)
+                        if nav_match:
+                            tags = clean_and_format_tags(nav_match.group(0))
+                        else:
+                            tags = "連載・作品推薦"
 
                     desc_match = re.search(r'##\s*作品[簡简]介\s*\n+(.*?)(?:\n+####|\n+##|\n+\[月票\]|\n+目录|\n+目錄|\Z)', content, re.DOTALL)
                     if desc_match:
