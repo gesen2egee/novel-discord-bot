@@ -1,7 +1,10 @@
 import aiohttp
 import json
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional
+
+# 台北時區 (UTC+8)
+TAIPEI_TZ = timezone(timedelta(hours=8))
 
 async def sync_to_google_sheet(
     webhook_url: str,
@@ -12,16 +15,17 @@ async def sync_to_google_sheet(
 ) -> bool:
     """
     透過 Google Apps Script Webhook 將小說資訊與評價同步至 Google 試算表。
-    高相容性 Payload 傳輸，並在日誌輸出同步狀態。
+    時間統一採用「台北時間 (UTC+8)」並僅顯示日期 (YYYY/MM/DD)。
     """
     if not webhook_url or not webhook_url.startswith("http"):
         print("[Google Sheets] 警告: 未設定有效的 GOOGLE_SHEET_WEBHOOK_URL，略過試算表同步。")
         return False
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # 取得當前台北時間，並格式化為純日期 (例如: 2026/08/17)
+    now_date_str = datetime.now(TAIPEI_TZ).strftime("%Y/%m/%d")
 
     payload = {
-        "time": now_str,
+        "time": now_date_str,
         "title_t": book_data.get("title_t", ""),
         "title_s": book_data.get("title_s", ""),
         "recommender": recommender_name,
@@ -35,7 +39,6 @@ async def sync_to_google_sheet(
     }
 
     try:
-        # 使用 text/plain 傳送 JSON 字串，完全避開 Google Apps Script 的 CORS 預檢阻擋
         headers = {"Content-Type": "text/plain;charset=utf-8"}
         body_data = json.dumps(payload, ensure_ascii=False)
 
