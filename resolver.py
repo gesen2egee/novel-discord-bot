@@ -48,14 +48,14 @@ def clean_and_format_tags(raw_text: str) -> str:
         link_map[placeholder] = f"[{label_t}]({url})"
         return f" {placeholder} "
 
-    # 1. 替換完整合法的 Markdown 連結
-    text = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)]+)\)', replace_link, raw_text)
+    # 1. 替換完整合法的 Markdown 連結 (支援帶有 "title" 的情況，將 title 丟棄)
+    text = re.sub(r'\[([^\]]+)\]\((https?://[^\s\)\"\']+)(?:\s+[^)]*)?\)', replace_link, raw_text)
 
-    # 2. 徹底過濾所有不完整或殘留的 http/https 網址 (如未閉合的 (https://www.qidian...)
+    # 2. 徹底過濾所有不完整或殘留的 http/https 網址
     text = re.sub(r'\(?https?://[^\s\)]*\)?', '', text)
 
-    # 3. 移除多餘符號（但保留字母與底線 placeholder）
-    text = re.sub(r'[\[\]\(\)\{\}*#`]', ' ', text)
+    # 3. 移除多餘符號（包含引號、括號等）
+    text = re.sub(r'[\[\]\(\)\{\}*#`"\'“”‘’]', ' ', text)
 
     # 4. 依照分隔符分割
     raw_items = re.split(r'[·•|｜,，/、\s]+', text)
@@ -72,7 +72,7 @@ def clean_and_format_tags(raw_text: str) -> str:
                 continue
             if item.isdigit():
                 continue
-            if any(bad in item.lower() for bad in ["http", "www", "qidian", "fanqie", "ciweimao", ".com", "html"]):
+            if any(bad in item.lower() for bad in ['http', 'www', 'qidian', 'fanqie', 'ciweimao', '.com', 'html', 'chapter', '正文卷', '免费试读', '加入书架']):
                 continue
             item_t = s2t_converter.convert(item)
             if item_t not in valid_tags:
@@ -139,6 +139,11 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                 # =========================================================================
                 if platform == "qidian":
                     title_clean = re.sub(r'(_起[點点]中文[網网]|_閱文集團).*$', '', raw_title).strip(" _-|《》")
+                    # 若標題被清空或為通用站名，從 content 提取真實書名
+                    if not title_clean or title_clean in ["起点中文网", "起點中文網", "起点读书", "起点女生网"]:
+                        t_match = re.search(r'(?:^|\n)#+\s*([^\n\r#\[\]]+?)(?:\s+在线阅读|\s+更新时间|\s*\n|\Z)', content)
+                        if t_match and t_match.group(1).strip() not in ["起点中文网", "全部分类", "作品信息"]:
+                            title_clean = t_match.group(1).strip()
                     
                     author_match = re.search(r'(?:作者[：:\s]*|##\s*\[?)([^\s\n\r\]\(\)_]+)(?:\]|\s*更新時間|\s*更新时间|\s*著|\s*閱文|\s*阅文)', content)
                     if author_match and author_match.group(1) not in ["作品信息", "最新章节", "起点中文网"]:
@@ -156,18 +161,18 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if tag_line:
                         tags = clean_and_format_tags(tag_line.group(1))
                     else:
-                        # 備援：若無連載狀態標記，抓取頂部分類導航
-                        nav_match = re.search(r'\[首页\]\(https://www\.qidian\.com/\)[^\n]*', content)
-                        if nav_match:
-                            tags = clean_and_format_tags(nav_match.group(0))
-                        else:
-                            tags = "連載・作品推薦"
+                        tags = "連載・作品推薦"
 
+                    # 簡介提取 (優先抓取 ## 作品簡介；若無則抓取標籤下方精華簡介)
                     desc_match = re.search(r'##\s*作品[簡简]介\s*\n+(.*?)(?:\n+####|\n+##|\n+\[月票\]|\n+目录|\n+目錄|\Z)', content, re.DOTALL)
-                    if desc_match:
+                    if desc_match and desc_match.group(1).strip():
                         description = desc_match.group(1).strip()
                     else:
-                        description = raw_desc
+                        sub_desc = re.search(r'(?:连载|完本|签约|VIP|免费)[^\n]*\n+\s*(.*?)(?:\n+_\d+|\n+\[免费试读\]|\n+##|\n+####|\Z)', content, re.DOTALL)
+                        if sub_desc and sub_desc.group(1).strip():
+                            description = sub_desc.group(1).strip()
+                        else:
+                            description = raw_desc
 
                 # =========================================================================
                 # 2. 番茄小說 (含 /keyword/ 與 /page/)
