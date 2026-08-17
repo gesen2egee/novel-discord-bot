@@ -145,27 +145,35 @@ def is_sync_channel(channel) -> bool:
                     return True
     return False
 
-def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = "乾糧") -> discord.Embed:
+def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = "乾糧", is_sync_channel: bool = True) -> discord.Embed:
     """組裝 Discord 小說 Embed 卡片"""
     info_lines = []
     
     if book_data.get("title_s"):
         info_lines.append(f"🔤 **簡體原名**：`{book_data['title_s']}`")
     
-    if evaluation == "糧草":
-        eval_text = "🔥 強力推薦（糧草）"
-        author_text = f"由 {author.display_name} 強力推薦"
-        embed_color = discord.Color.from_rgb(230, 126, 34)  # 暖橙金
-    elif evaluation == "不推薦":
-        eval_text = "⚠️ 不推薦"
-        author_text = f"由 {author.display_name} 分享（⚠️ 不推薦）"
-        embed_color = discord.Color.from_rgb(149, 165, 166)  # 灰色
-    else:  # 乾糧（預設）
-        eval_text = "🌾 一般推薦（乾糧）"
-        author_text = f"由 {author.display_name} 一般推薦"
-        embed_color = discord.Color.from_rgb(52, 152, 219)  # 經典藍
+    if is_sync_channel:
+        if evaluation == "糧草":
+            eval_text = "🔥 強力推薦（糧草）"
+            author_text = f"由 {author.display_name} 強力推薦"
+            embed_color = discord.Color.from_rgb(230, 126, 34)  # 暖橙金
+        elif evaluation == "不推薦":
+            eval_text = "⚠️ 不推薦"
+            author_text = f"由 {author.display_name} 分享（⚠️ 不推薦）"
+            embed_color = discord.Color.from_rgb(149, 165, 166)  # 灰色
+        else:  # 乾糧（預設）
+            eval_text = "🌾 一般推薦（乾糧）"
+            author_text = f"由 {author.display_name} 一般推薦"
+            embed_color = discord.Color.from_rgb(52, 152, 219)  # 經典藍
 
-    info_lines.append(f"📢 **分享人**：{author.mention} ｜ **評價**：**{eval_text}**")
+        info_lines.append(f"📢 **分享人**：{author.mention} ｜ **評價**：**{eval_text}** ｜ ✅ **已寫入表單**")
+        footer_text = "✅ 已自動同步至線上書單 ｜ 點擊標題直接前往書籍頁面"
+    else:
+        author_text = f"由 {author.display_name} 閒聊分享"
+        embed_color = discord.Color.from_rgb(52, 152, 219)
+        info_lines.append(f"📢 **分享人**：{author.mention} ｜ 💬 *(僅展開書卡，不進入表單)*")
+        footer_text = "💡 本頻道僅展開書卡（不進入表單） ｜ 點擊標題前往書籍頁面"
+
     info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
     info_lines.append(f"🏷️ **標籤分類**：{book_data.get('tags', '作品標籤')}")
     info_lines.append("")
@@ -192,7 +200,7 @@ def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = 
     if book_data.get("cover"):
         embed.set_thumbnail(url=book_data["cover"])
 
-    embed.set_footer(text="小說資訊自動解析 ｜ 點擊標題直接前往書籍頁面")
+    embed.set_footer(text=footer_text)
     return embed
 
 class BookActionView(discord.ui.View):
@@ -204,6 +212,11 @@ class BookActionView(discord.ui.View):
         self.jump_url = jump_url
         self.should_sync = should_sync
         self.evaluation = "乾糧"  # 預設為一般推薦 (乾糧)
+
+        if not self.should_sync:
+            # 在其他頻道 (非推書頻道)，僅保留「線上書單」與「刪除書卡」兩個按鈕
+            self.remove_item(self.toggle_tier)
+            self.remove_item(self.toggle_evaluation)
 
         if GOOGLE_SHEET_VIEW_URL:
             self.add_item(discord.ui.Button(
@@ -233,7 +246,7 @@ class BookActionView(discord.ui.View):
                 child.label = "👎 改為不推薦"
                 child.style = discord.ButtonStyle.secondary
 
-        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation)
+        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation, is_sync_channel=self.should_sync)
         await interaction.response.edit_message(embed=new_embed, view=self)
 
         if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
@@ -264,7 +277,7 @@ class BookActionView(discord.ui.View):
             button.label = "👎 改為不推薦"
             button.style = discord.ButtonStyle.secondary
 
-        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation)
+        new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation, is_sync_channel=self.should_sync)
         await interaction.response.edit_message(embed=new_embed, view=self)
 
         if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
@@ -454,7 +467,7 @@ async def on_message(message: discord.Message):
 
     # 4. 發送書卡 (所有頻道均會發送書卡；但僅指定推書頻道會同步進 Google 試算表與更新獵犬庫)
     if book_data:
-        embed_reply = build_book_embed(book_data, message.author, evaluation="乾糧")
+        embed_reply = build_book_embed(book_data, message.author, evaluation="乾糧", is_sync_channel=should_sync)
         view = BookActionView(book_data, message.author, jump_url=message.jump_url, should_sync=should_sync)
 
         sent_msg = await message.reply(
