@@ -27,6 +27,42 @@ def clean_text(text: str) -> str:
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
+def clean_tags(raw_text: str) -> str:
+    """
+    徹底清理標籤文字：
+    1. 將 Markdown 連結 [文字](url) 轉換為純文字
+    2. 移除任何殘留的 URL、括號或截斷網址 (如 (https://www.qidian... 或 https://...)
+    3. 移除多餘符號，統一以「・」分隔
+    """
+    if not raw_text:
+        return "作品標籤"
+    
+    # 1. 轉換 Markdown 連結 [標籤名](url) -> 標籤名
+    text = re.sub(r'\[([^\]]+)\]\([^\)]*\)?', r'\1', raw_text)
+    # 2. 徹底過濾任何殘留或截斷的 http/https 網址
+    text = re.sub(r'\(?https?://[^\s\)]*\)?', '', text)
+    # 3. 過濾 Markdown 語法符號與多餘括號
+    text = re.sub(r'[\[\]\(\)\{\}_*#`]', ' ', text)
+    # 4. 將常見分隔符號（·, •, ｜, |, ,, ，, /, 空白）分割為乾淨標籤列表
+    items = re.split(r'[·•|｜,，/、\s]+', text)
+    
+    valid_tags = []
+    for item in items:
+        item = item.strip(" -_·•|/，,")
+        if not item:
+            continue
+        if len(item) > 15:
+            continue
+        if item.isdigit():
+            continue
+        # 排除包含網址關鍵字的雜訊
+        if any(bad in item.lower() for bad in ["http", "www", "qidian", "fanqie", "ciweimao", ".com", "html", "channel"]):
+            continue
+        if item not in valid_tags:
+            valid_tags.append(item)
+    
+    return "・".join(valid_tags) if valid_tags else "作品標籤"
+
 def format_word_count(num_str: str) -> str:
     """將純數字或帶萬字數字格式化為漂亮的萬字字串"""
     num_str = num_str.replace(",", "").replace("_", "").strip()
@@ -99,12 +135,9 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if word_match:
                         stats = word_match.group(1).replace("_", "").strip()
 
-                    tag_line = re.search(r'((?:連載|完本|連載中|签约|VIP|\[.+?\]|[^\n·]{2,6})(?:·[^\n]{2,30})+)', content)
+                    tag_line = re.search(r'((?:連載|完本|連載中|签约|VIP|轻小说|玄幻|都市|仙侠|科幻|游戏|历史|奇幻|诸天|同人|\[.+?\])(?:[·\s]+(?:\[.+?\]|[^\n\r]+))+)', content)
                     if tag_line:
-                        raw_tag_str = tag_line.group(1)
-                        clean_tag_str = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', raw_tag_str)
-                        clean_tag_str = re.sub(r'[\[\]]', '', clean_tag_str).replace("·", "・")
-                        tags = clean_tag_str.strip("・ ")
+                        tags = clean_tags(tag_line.group(1))
                     else:
                         tags = "輕小說・連載・VIP"
 
@@ -145,8 +178,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
 
                     tag_m = re.search(r'(?:连载中|完结|已完结)\s+([^\n\r]+?)(?=\s*\[|\s*\n|\s*\d+章)', content)
                     if tag_m:
-                        raw_t = tag_m.group(1).strip()
-                        tags = re.sub(r'\s+', '・', raw_t)
+                        tags = clean_tags(tag_m.group(1))
                     else:
                         tags = "都市・穿越・連載中"
 
@@ -191,7 +223,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if tag_extra and tag_extra.group(1) not in tag_list:
                         tag_list.insert(0, tag_extra.group(1))
                     if tag_list:
-                        tags = "・".join(tag_list)
+                        tags = clean_tags("・".join(tag_list))
                     else:
                         tags = "宅文・歷史軍事・連載中"
 
@@ -215,7 +247,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                 title_simplified = t2s_converter.convert(title_clean)
                 author_t = s2t_converter.convert(author)
                 desc_t = s2t_converter.convert(clean_text(description))
-                tags_t = s2t_converter.convert(tags)
+                tags_t = s2t_converter.convert(clean_tags(tags))
                 stats_t = s2t_converter.convert(stats)
 
                 return {
