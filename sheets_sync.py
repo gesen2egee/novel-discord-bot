@@ -1,4 +1,5 @@
 import aiohttp
+import json
 from datetime import datetime
 from typing import Optional
 
@@ -11,9 +12,10 @@ async def sync_to_google_sheet(
 ) -> bool:
     """
     透過 Google Apps Script Webhook 將小說資訊與評價同步至 Google 試算表。
-    支援 Google Apps Script 的 302/307 重定向。
+    高相容性 Payload 傳輸，並在日誌輸出同步狀態。
     """
-    if not webhook_url:
+    if not webhook_url or not webhook_url.startswith("http"):
+        print("[Google Sheets] 警告: 未設定有效的 GOOGLE_SHEET_WEBHOOK_URL，略過試算表同步。")
         return False
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -33,16 +35,21 @@ async def sync_to_google_sheet(
     }
 
     try:
-        # 重要：Google Apps Script Webhook 會發出 302 重定向，必須設定 allow_redirects=True
+        # 使用 text/plain 傳送 JSON 字串，完全避開 Google Apps Script 的 CORS 預檢阻擋
+        headers = {"Content-Type": "text/plain;charset=utf-8"}
+        body_data = json.dumps(payload, ensure_ascii=False)
+
         async with aiohttp.ClientSession() as session:
             async with session.post(
                 webhook_url,
-                json=payload,
+                data=body_data,
+                headers=headers,
                 allow_redirects=True,
-                timeout=aiohttp.ClientTimeout(total=10)
+                timeout=aiohttp.ClientTimeout(total=15)
             ) as resp:
-                print(f"[Google Sheets] 同步狀態碼: {resp.status}")
+                resp_text = await resp.text()
+                print(f"[Google Sheets] 同步回應狀態碼: {resp.status} ｜ 回應內容: {resp_text[:100]}")
                 return resp.status in [200, 302, 307]
     except Exception as e:
-        print(f"[Google Sheets Sync Error] {e}")
+        print(f"[Google Sheets Sync Error] 同步失敗: {e}")
         return False
