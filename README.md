@@ -16,6 +16,7 @@
    - 只有分享該小說連結的原作者點擊 **`🗑️ 刪除書卡`** 才能撤回訊息，其他人點擊會收到隱私提示無權刪除，防止他人惡意亂刪！
 5. **📊 Google 試算表自動同步與去重**：
    - 每次推書自動同步 Google 表格，支援智慧去重與推薦人累加。
+   - 支援台北時間純日期（`YYYY/MM/DD`）。
    - 卡片下方附帶 **`📊 查看線上書單`** 按鈕直接跳轉 Google Sheets。
 6. **網址自動正規化**：
    - 起點：一律正規化為 `https://www.qidian.com/book/{id}/`
@@ -30,11 +31,10 @@
 ## 📊 Google 試算表自動同步設定教學
 
 ### 步驟 1：建立 Google 試算表
-1. 打開 [Google 試算表 (sheets.new)](https://sheets.new/) 建立新表格。
-2. 在第 1 列依序填入 11 個欄位標題：
-   `推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `分享人` ｜ `平台` ｜ `作者` ｜ `字數/數據` ｜ `標籤` ｜ `小說網址` ｜ `Discord 討論連結` ｜ `評價`
+在第 1 列依序填入 11 個欄位標題：
+`推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `推薦人` ｜ `平台` ｜ `作者` ｜ `小說網址` ｜ `DC討論原文` ｜ `是否推薦` ｜ `字數/數據` ｜ `標籤`
 
-### 步驟 2：貼上 Google Apps Script 腳本 (支援去重)
+### 步驟 2：貼上 Google Apps Script 腳本 (最新欄位順序與去重)
 1. 點擊頂部選單的 **「擴充功能」 $\rightarrow$ 「Apps Script」**。
 2. 清空裡面的程式碼，完整貼上以下腳本：
 
@@ -53,31 +53,36 @@ function doPost(e) {
     var values = sheet.getDataRange().getValues();
     var existingRowIndex = -1;
     
+    // 1. 去重比對：檢查第 7 欄 (小說網址) 或第 2 欄 (繁體書名)
     for (var i = 1; i < values.length; i++) {
-      var rowUrl = values[i][8];
-      var rowTitle = values[i][1];
+      var rowUrl = values[i][6];   // 第 7 欄: 小說網址
+      var rowTitle = values[i][1]; // 第 2 欄: 繁體書名
       if (rowUrl === data.url || (data.title_t && rowTitle === data.title_t)) {
         existingRowIndex = i + 1;
         break;
       }
     }
     
+    // 2. 若書籍已存在，更新現有資料 (去重)
     if (existingRowIndex !== -1) {
-      var currentRecommenders = sheet.getRange(existingRowIndex, 4).getValue().toString();
+      var currentRecommenders = sheet.getRange(existingRowIndex, 4).getValue().toString(); // 第 4 欄: 推薦人
       if (data.recommender && currentRecommenders.indexOf(data.recommender) === -1) {
         currentRecommenders = currentRecommenders ? (currentRecommenders + ", " + data.recommender) : data.recommender;
       }
-      sheet.getRange(existingRowIndex, 1).setValue(data.time);
+      sheet.getRange(existingRowIndex, 1).setValue(data.time); // 更新為最新時間
       sheet.getRange(existingRowIndex, 4).setValue(currentRecommenders);
-      sheet.getRange(existingRowIndex, 10).setValue(data.jump_url);
-      sheet.getRange(existingRowIndex, 11).setValue(data.evaluation || "推薦");
+      sheet.getRange(existingRowIndex, 8).setValue(data.jump_url); // 第 8 欄: DC討論原文
+      sheet.getRange(existingRowIndex, 9).setValue(data.evaluation || "推薦"); // 第 9 欄: 是否推薦
+      sheet.getRange(existingRowIndex, 10).setValue(data.stats); // 第 10 欄: 字數/數據
+      sheet.getRange(existingRowIndex, 11).setValue(data.tags);  // 第 11 欄: 標籤
       
       return ContentService.createTextOutput(JSON.stringify({"status": "updated", "row": existingRowIndex}))
         .setMimeType(ContentService.MimeType.JSON);
     }
     
+    // 3. 全新書籍寫入新列 (精準填入空白行)
     var targetRow = values.length + 1;
-    if (values.length >= 2 && !values[1][1] && !values[1][8]) {
+    if (values.length >= 2 && !values[1][1] && !values[1][6]) {
       targetRow = 2;
     }
     
@@ -88,11 +93,11 @@ function doPost(e) {
       data.recommender || "",
       data.platform || "",
       data.author || "",
-      data.stats || "",
-      data.tags || "",
       data.url || "",
       data.jump_url || "",
-      data.evaluation || "推薦"
+      data.evaluation || "推薦",
+      data.stats || "",
+      data.tags || ""
     ];
     
     sheet.getRange(targetRow, 1, 1, newRowData.length).setValues([newRowData]);
@@ -107,11 +112,8 @@ function doPost(e) {
 ```
 
 ### 步驟 3：部署並取得 Webhook 網址
-1. 點擊 **「部署」 $\rightarrow$ 「新增部署作業」** $\rightarrow$ 選擇 **「網頁應用程式」**。
-2. 設定：執行身分：`我` ｜ 誰可以存取：`所有人`。
-3. 部署後複製 **網頁應用程式網址 (Web app URL)**。
-4. 在雲端環境變數填入：
-   - `GOOGLE_SHEET_WEBHOOK_URL` = 你的 Web app URL
+1. 點擊 **「部署」 $\rightarrow$ 「管理部署作業」 $\rightarrow$ 點擊鉛筆圖示編輯**。
+2. 版本選擇 **「新版本 (New version)」** $\rightarrow$ 點擊 **「部署」**。
 
 ---
 
