@@ -187,6 +187,20 @@ class BookActionView(discord.ui.View):
 
         await interaction.message.delete()
 
+class CyberHoundView(discord.ui.View):
+    """賽博獵犬通知互動按鈕"""
+    def __init__(self, original_author: discord.Member):
+        super().__init__(timeout=None)
+        self.original_author = original_author
+
+    @discord.ui.button(label="🙇 我知錯了", style=discord.ButtonStyle.secondary, custom_id="hound_dismiss_btn", row=0)
+    async def dismiss_hound(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.original_author.id:
+            await interaction.response.send_message("❌ 只有觸發獵犬的原發文者才可以刪除這則通知喔！", ephemeral=True)
+            return
+
+        await interaction.message.delete()
+
 @bot.event
 async def on_ready():
     print(f"==================================================")
@@ -294,8 +308,10 @@ async def on_message(message: discord.Message):
         else:
             hound_text = f"🐶 **你賽博獵犬囉！**\n這本前面 **{first_user}** 已經推薦過了～"
 
+        hound_view = CyberHoundView(original_author=message.author)
         await message.reply(
             content=hound_text,
+            view=hound_view,
             mention_author=False
         )
         return
