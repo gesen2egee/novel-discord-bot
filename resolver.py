@@ -16,9 +16,14 @@ PLATFORM_NAMES = {
 }
 
 def clean_text(text: str) -> str:
-    """清理多餘的連續空白與換行"""
+    """清理多餘的連續空白、換行與無效的 Markdown 連結"""
     if not text:
         return ""
+    # 過濾 javascript: 虛擬連結與按鈕標籤
+    text = re.sub(r'\[?(?:作品[簡简]介|作品[信資]息|立即[閱阅][讀读]|放入[書书]架|訂閱|订阅)\]?\(javascript:[^\)]*\)', '', text)
+    text = re.sub(r'\[?(?:\[\s*\]|\(\s*\))', '', text)
+    # 過濾開頭的項目符號留白
+    text = re.sub(r'^\s*[\*•\-]\s*\n', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
@@ -82,7 +87,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                 if platform == "qidian":
                     title_clean = re.sub(r'(_起[點点]中文[網网]|_閱文集團).*$', '', raw_title).strip(" _-|《》")
                     
-                    # 作者提取 (優先從內文正則尋找)
                     author_match = re.search(r'(?:作者[：:\s]*|##\s*\[?)([^\s\n\r\]\(\)_]+)(?:\]|\s*更新時間|\s*更新时间|\s*著|\s*閱文|\s*阅文)', content)
                     if author_match and author_match.group(1) not in ["作品信息", "最新章节", "起点中文网"]:
                         author = author_match.group(1).strip()
@@ -91,12 +95,10 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                         if a_m:
                             author = a_m.group(1).strip()
 
-                    # 字數提取
                     word_match = re.search(r'(_?(\d+(?:\.\d+)?(?:萬|万)?)_?\s*字)', content)
                     if word_match:
                         stats = word_match.group(1).replace("_", "").strip()
 
-                    # 標籤提取
                     tag_line = re.search(r'((?:連載|完本|連載中|签约|VIP|\[.+?\]|[^\n·]{2,6})(?:·[^\n]{2,30})+)', content)
                     if tag_line:
                         raw_tag_str = tag_line.group(1)
@@ -106,7 +108,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         tags = "輕小說・連載・VIP"
 
-                    # 簡介提取 (鎖定 ## 作品简介 與 下方月票/評論 之間)
                     desc_match = re.search(r'##\s*作品[簡简]介\s*\n+(.*?)(?:\n+####|\n+##|\n+\[月票\]|\n+目录|\n+目錄|\Z)', content, re.DOTALL)
                     if desc_match:
                         description = desc_match.group(1).strip()
@@ -114,10 +115,9 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                         description = raw_desc
 
                 # =========================================================================
-                # 2. 番茄小說 (含 /keyword/ 搜尋頁與 /page/ 書籍主頁)
+                # 2. 番茄小說 (含 /keyword/ 與 /page/)
                 # =========================================================================
                 elif platform in ["fanqie", "fanqie_keyword"]:
-                    # 書名提取：若有 Markdown 圖片標題，優先拿圖片上的真實書名
                     img_title_m = re.search(r'!\[Image\s*\d*:\s*([^\]]+)\]', content)
                     if img_title_m and "番茄" not in img_title_m.group(1):
                         title_clean = img_title_m.group(1).strip()
@@ -129,12 +129,10 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                             if len(parts) > 1:
                                 author = parts[1].strip()
 
-                    # 作者提取 (例如: 黑猫梦境 / 著 或 作者：XXX)
                     author_m = re.search(r'([^\s\n\r/]+)\s*/\s*著|作者[：:\s]+([^\s\n\r]+)', content)
                     if author_m:
                         author = (author_m.group(1) or author_m.group(2)).strip()
 
-                    # 字數與在讀人數
                     word_match = re.search(r'(\d+(?:\.\d+)?\s*(?:萬|万)?\s*字)', content)
                     read_match = re.search(r'(\d+(?:\.\d+)?\s*(?:萬|万)?\s*人在[讀读])', content)
                     stat_parts = []
@@ -145,7 +143,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if stat_parts:
                         stats = " ｜ ".join(stat_parts)
 
-                    # 標籤提取 (例如: 连载中 男频衍生 穿越 明朝 同人)
                     tag_m = re.search(r'(?:连载中|完结|已完结)\s+([^\n\r]+?)(?=\s*\[|\s*\n|\s*\d+章)', content)
                     if tag_m:
                         raw_t = tag_m.group(1).strip()
@@ -153,8 +150,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         tags = "都市・穿越・連載中"
 
-                    # 簡介提取
-                    # 在番茄中，簡介通常在 [开始阅读] 或 [下载番茄小说] 後面
                     desc_m = re.search(r'(?:\[下载番茄小说\][^\n]*\n+|简介[：:\s]*\n+)(.*?)(?:\n+男频|\n+女频|\n+目录|\n+目錄|\n+正序|\Z)', content, re.DOTALL)
                     if desc_m:
                         description = desc_m.group(1).strip()
@@ -165,24 +160,20 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                 # 3. 刺蝟貓 (含 www, wap, mip)
                 # =========================================================================
                 elif platform == "ciweimao":
-                    # 書名清理 (例如: 大明:征服天堂最新章节(六角)... -> 大明:征服天堂)
                     title_m = re.search(r'^(.*?)(?:最新[章節章节]|无弹窗|_刺[蝟猬][貓猫]|-欢乐书客|\(|$)', raw_title)
                     if title_m:
                         title_clean = title_m.group(1).strip(" _-|:：")
                     else:
                         title_clean = raw_title.split("_")[0].strip()
 
-                    # 作者提取 (例如: Title 裡的 (六角) 或 ### 作者信息\n... ### 六角)
                     author_m = re.search(r'\(([^\)\(]+)\),|###\s*作者[信資]息\s*\n+.*?(?:###\s*([^\s\n\r\[\]]+)|\[([^\s\n\r\]]+)\]\(https://www.ciweimao.com/reader/)', content, re.DOTALL)
                     if author_m:
                         author = (author_m.group(1) or author_m.group(2) or author_m.group(3)).strip()
                     else:
-                        # 備用 Title 正則
                         t_author = re.search(r'\(([^)]+)\)', raw_title)
                         if t_author:
                             author = t_author.group(1).strip()
 
-                    # 字數與點擊量提取 (例如: 总字数：9420864 或 942万字)
                     word_m = re.search(r'总字数[：:]\s*\**(\d+)\**|完成字数[：:]\s*_?(\d+)_?|(\d+(?:\.\d+)?(?:萬|万)?字)', content)
                     click_m = re.search(r'总点击[：:]\s*\**([^\s\*]+)\**', content)
                     stat_parts = []
@@ -194,7 +185,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if stat_parts:
                         stats = " ｜ ".join(stat_parts)
 
-                    # 標籤提取 (例如: [宅文]>[历史军事] / 连载中)
                     tag_m = re.findall(r'\[([^\]]+)\]\(https://www.ciweimao.com/(?:book_list|index/header_cate_list)[^\)]+\)', content)
                     tag_extra = re.search(r'(连载中|已完结|完结)', content)
                     tag_list = list(tag_m)
@@ -205,26 +195,26 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         tags = "宅文・歷史軍事・連載中"
 
-                    # 簡介提取 (鎖定 [作品简介] 與 下方 [本站郑重提醒/目录] 之間)
-                    desc_m = re.search(r'(?:\[作品简介\][^\n]*\n+|简介[：:\s]*\n+)(.*?)(?:\n+（本站郑重提醒|\n+小说性质|\n+###|\n+####|\n+目录|\Z)', content, re.DOTALL)
+                    # 簡介提取 (過濾 [作品信息] 與 [作品简介] 等 javascript 按鈕)
+                    desc_m = re.search(r'(?:\[作品[簡简]介\][^\n]*\n+|简介[：:\s]*\n+)(.*?)(?:\n+（本站[鄭郑]重提醒|\n+小说性质|\n+###|\n+####|\n+目录|\Z)', content, re.DOTALL)
                     if desc_m:
-                        description = desc_m.group(1).strip()
+                        raw_ciwei_desc = desc_m.group(1)
                     else:
-                        description = raw_desc
+                        raw_ciwei_desc = raw_desc
 
-                # 清理免責聲明與系統尾巴
-                if description:
-                    description = re.sub(r'（?本站[鄭郑]重提醒.*?切勿模仿[。)]?', '', description)
-                    description = clean_text(description)
+                    # 清理刺蝟貓特定按鈕與雜訊
+                    raw_ciwei_desc = re.sub(r'[\*•\-]?\s*\[?作品[信資]息\]?\(javascript:[^\)]*\)', '', raw_ciwei_desc)
+                    raw_ciwei_desc = re.sub(r'（?本站[鄭郑]重提醒.*?切勿模仿[。)]?', '', raw_ciwei_desc)
+                    description = raw_ciwei_desc
 
                 if not description:
                     description = raw_desc if raw_desc else "暫無簡介"
 
-                # 繁簡雙向字元處理
+                # 繁簡雙向字元處理與最終清理
                 title_traditional = s2t_converter.convert(title_clean)
                 title_simplified = t2s_converter.convert(title_clean)
                 author_t = s2t_converter.convert(author)
-                desc_t = s2t_converter.convert(description)
+                desc_t = s2t_converter.convert(clean_text(description))
                 tags_t = s2t_converter.convert(tags)
                 stats_t = s2t_converter.convert(stats)
 

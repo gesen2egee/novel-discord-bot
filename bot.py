@@ -14,11 +14,14 @@ from sheets_sync import sync_to_google_sheet
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 JINA_API_KEY = os.getenv("JINA_API_KEY")
-PORT = int(os.getenv("PORT", 8080))  # Render / 雲端平台預設 Port
+PORT = int(os.getenv("PORT", 8080))
 
-# Google 試算表設定 (選填)
+# Google 試算表設定 (若無設定環境變數則使用預設試算表)
 GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
-GOOGLE_SHEET_VIEW_URL = os.getenv("GOOGLE_SHEET_VIEW_URL")
+GOOGLE_SHEET_VIEW_URL = os.getenv(
+    "GOOGLE_SHEET_VIEW_URL",
+    "https://docs.google.com/spreadsheets/d/13COcdiJUUFApMDVBbBTf0wY2utr9gGjW12gio43Awqc/edit?gid=0#gid=0"
+)
 
 # 初始化快取 (最多快取 200 本書，有效期 10 分鐘)
 cache = TTLCache(maxsize=200, ttl=600)
@@ -28,7 +31,7 @@ intents.message_content = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# ----------------- 輕量 Web 健康檢查伺服器 (供 Render Free Web Service 使用) -----------------
+# ----------------- 輕量 Web 健康檢查伺服器 -----------------
 async def health_check(request):
     return web.Response(text="Discord Novel Bot is Running!")
 
@@ -41,17 +44,15 @@ async def start_web_server():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     print(f" Web 健康檢查端口已在 Port {PORT} 啟動 (支援 Render 免費 Web Service)")
-# ----------------------------------------------------------------------------------------
+# -----------------------------------------------------------
 
 def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bool = True) -> discord.Embed:
     """組裝 Discord 小說 Embed 卡片"""
     info_lines = []
     
-    # 雙行書名：簡體原名
     if book_data.get("title_s"):
         info_lines.append(f"🔤 **簡體原名**：`{book_data['title_s']}`")
     
-    # 分享人、評價、作者、數據與標籤
     eval_text = "👍 推薦" if is_recommended else "⚠️ 不推薦"
     info_lines.append(f"📢 **分享人**：{author.mention} ｜ **評價**：**{eval_text}**")
     info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
@@ -65,7 +66,6 @@ def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bo
     if len(description_text) > 4000:
         description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
 
-    # 頂部狀態文字
     if is_recommended:
         author_text = f"由 {author.display_name} 推薦"
     else:
@@ -98,6 +98,7 @@ class BookActionView(discord.ui.View):
         self.jump_url = jump_url
         self.is_recommended = True
 
+        # 線上書單按鈕 (必顯示)
         if GOOGLE_SHEET_VIEW_URL:
             self.add_item(discord.ui.Button(
                 label="📊 查看線上書單",
@@ -146,8 +147,9 @@ async def on_ready():
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
     print(f" 簡介模式：100% 完整簡介顯示 (Embed Description 模式)")
+    print(f" 線上書單：{GOOGLE_SHEET_VIEW_URL}")
     if GOOGLE_SHEET_WEBHOOK_URL:
-        print(f" Google 試算表同步：已啟用")
+        print(f" Google 試算表 Webhook：已配置")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
 
@@ -197,7 +199,6 @@ async def main():
     if not DISCORD_TOKEN or DISCORD_TOKEN == "YOUR_DISCORD_BOT_TOKEN_HERE":
         print("[錯誤] 請先在環境變數中設定您的 DISCORD_TOKEN！")
         return
-    # 同時啟動 Web 健康檢查端口與 Discord Bot
     await start_web_server()
     await bot.start(DISCORD_TOKEN)
 
