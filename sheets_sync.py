@@ -11,7 +11,7 @@ async def sync_to_google_sheet(
 ) -> bool:
     """
     透過 Google Apps Script Webhook 將小說資訊與評價同步至 Google 試算表。
-    status: '推薦' | '不推薦/避雷' | '一般分享'
+    支援 Google Apps Script 的 302/307 重定向。
     """
     if not webhook_url:
         return False
@@ -33,9 +33,16 @@ async def sync_to_google_sheet(
     }
 
     try:
+        # 重要：Google Apps Script Webhook 會發出 302 重定向，必須設定 allow_redirects=True
         async with aiohttp.ClientSession() as session:
-            async with session.post(webhook_url, json=payload, timeout=aiohttp.ClientTimeout(total=8)) as resp:
-                return resp.status == 200
+            async with session.post(
+                webhook_url,
+                json=payload,
+                allow_redirects=True,
+                timeout=aiohttp.ClientTimeout(total=10)
+            ) as resp:
+                print(f"[Google Sheets] 同步狀態碼: {resp.status}")
+                return resp.status in [200, 302, 307]
     except Exception as e:
         print(f"[Google Sheets Sync Error] {e}")
         return False
