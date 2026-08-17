@@ -25,10 +25,35 @@ intents.message_content = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 def build_book_embed(book_data: dict, author: discord.Member, original_msg_url: str = None) -> discord.Embed:
-    """組裝精美的 Discord 小說 Embed 卡片"""
+    """
+    組裝精美的 Discord 小說 Embed 卡片。
+    使用 Embed.description 承載完整簡介 (支援高達 4096 字元，確保 100% 完整呈現不被截斷)。
+    """
+    # 組合卡片內文資訊
+    info_lines = []
+    
+    # 雙行書名：簡體原名
+    if book_data.get("title_s"):
+        info_lines.append(f"🔤 **簡體原名**：`{book_data['title_s']}`")
+    
+    # 推薦人、作者、數據與標籤
+    info_lines.append(f"📢 **推薦人**：{author.mention}")
+    info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
+    info_lines.append(f"🏷️ **標籤分類**：{book_data.get('tags', '作品標籤')}")
+    info_lines.append("")
+    info_lines.append("📝 **完整作品簡介**：")
+    info_lines.append(book_data.get("description", "暫無簡介"))
+
+    description_text = "\n".join(info_lines)
+
+    # 安全邊界保護 (Discord description 上限 4096，保留安全餘量)
+    if len(description_text) > 4000:
+        description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
+
     embed = discord.Embed(
         title=f"📖 [{book_data['platform']}] {book_data['title_t']}",
         url=book_data["url"],
+        description=description_text,
         color=discord.Color.from_rgb(52, 152, 219)
     )
 
@@ -38,26 +63,11 @@ def build_book_embed(book_data: dict, author: discord.Member, original_msg_url: 
         icon_url=author.display_avatar.url
     )
 
-    # 雙行書名：顯示簡體原名（方便複製搜尋）
-    if book_data.get("title_s"):
-        embed.add_field(name="🔤 簡體原名", value=f"`{book_data['title_s']}`", inline=False)
-
-    # 推薦人、作者與統計數據
-    embed.add_field(name="📢 推薦人", value=author.mention, inline=True)
-    embed.add_field(name="👤 作者", value=book_data.get("author", "未知"), inline=True)
-    embed.add_field(name="📊 字數 / 數據", value=book_data.get("stats", "詳見官網"), inline=True)
-
-    # 標籤分類
-    embed.add_field(name="🏷️ 標籤分類", value=book_data.get("tags", "作品標籤"), inline=False)
-
-    # 完整簡介 (不截斷)
-    embed.add_field(name="📝 完整簡介", value=book_data.get("description", "暫無簡介"), inline=False)
-
     # 若為轉發至彙整頻道，附上原討論訊息連結
     if original_msg_url:
         embed.add_field(name="💬 來源討論", value=f"[點擊前往原對話]({original_msg_url})", inline=False)
 
-    # 高解析封面縮圖
+    # 高解析官方封面縮圖
     if book_data.get("cover"):
         embed.set_thumbnail(url=book_data["cover"])
 
@@ -88,6 +98,7 @@ async def on_ready():
     print(f" 小說解析機器人已成功上線！")
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
+    print(f" 簡介模式：100% 完整簡介顯示 (Embed Description 模式)")
     print(f" 自動轉發功能：已啟用 (目標頻道名稱關鍵字: {RECOMMEND_CHANNEL_NAME})")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 ＆ 自動彙整書單"))
