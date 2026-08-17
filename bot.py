@@ -16,6 +16,9 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 JINA_API_KEY = os.getenv("JINA_API_KEY")
 PORT = int(os.getenv("PORT", 8080))
 
+# 試算表同步頻道設定 (支援名稱或頻道ID，以逗號分隔；預設為「懶人推書,推薦書單」)
+SYNC_CHANNELS = os.getenv("SYNC_CHANNELS", "懶人推書,推薦書單").strip()
+
 # Google 試算表設定
 GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 GOOGLE_SHEET_VIEW_URL = os.getenv(
@@ -48,6 +51,41 @@ async def start_web_server():
     await site.start()
     print(f" Web 健康檢查端口已在 Port {PORT} 啟動")
 # -----------------------------------------------------------
+
+def is_sync_channel(channel) -> bool:
+    """
+    判斷指定頻道（或討論串母頻道）是否屬於允許同步至 Google 試算表的頻道。
+    預設支援「懶人推書」與「推薦書單」。
+    """
+    if not SYNC_CHANNELS:
+        return True  # 若未設定則預設全部同步
+
+    target_names = []
+    target_ids = []
+
+    if hasattr(channel, "name"):
+        target_names.append(channel.name.lower().replace("#", "").strip())
+    if hasattr(channel, "id"):
+        target_ids.append(channel.id)
+
+    # 若為討論串 (Thread)，同時檢查母頻道名稱與 ID
+    if hasattr(channel, "parent") and channel.parent:
+        if hasattr(channel.parent, "name"):
+            target_names.append(channel.parent.name.lower().replace("#", "").strip())
+        if hasattr(channel.parent, "id"):
+            target_ids.append(channel.parent.id)
+
+    sync_list = [c.strip().strip('"').strip("'").replace("#", "").lower() for c in SYNC_CHANNELS.split(",") if c.strip()]
+
+    for allowed in sync_list:
+        if allowed.isdigit():
+            if int(allowed) in target_ids:
+                return True
+        else:
+            for name in target_names:
+                if allowed in name:
+                    return True
+    return False
 
 def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = "乾糧") -> discord.Embed:
     """組裝 Discord 小說 Embed 卡片"""
@@ -101,11 +139,12 @@ def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = 
 
 class BookActionView(discord.ui.View):
     """卡片互動按鈕"""
-    def __init__(self, book_data: dict, original_author: discord.Member, jump_url: str = ""):
+    def __init__(self, book_data: dict, original_author: discord.Member, jump_url: str = "", should_sync: bool = False):
         super().__init__(timeout=None)
         self.book_data = book_data
         self.original_author = original_author
         self.jump_url = jump_url
+        self.should_sync = should_sync
         self.evaluation = "乾糧"  # 預設為一般推薦 (乾糧)
 
         if GOOGLE_SHEET_VIEW_URL:
@@ -139,7 +178,7 @@ class BookActionView(discord.ui.View):
         new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation)
         await interaction.response.edit_message(embed=new_embed, view=self)
 
-        if GOOGLE_SHEET_WEBHOOK_URL:
+        if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
                 GOOGLE_SHEET_WEBHOOK_URL,
                 self.book_data,
@@ -170,7 +209,7 @@ class BookActionView(discord.ui.View):
         new_embed = build_book_embed(self.book_data, self.original_author, self.evaluation)
         await interaction.response.edit_message(embed=new_embed, view=self)
 
-        if GOOGLE_SHEET_WEBHOOK_URL:
+        if self.should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
                 GOOGLE_SHEET_WEBHOOK_URL,
                 self.book_data,
@@ -207,7 +246,8 @@ async def on_ready():
     print(f" 小說解析機器人已成功上線！")
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
-    print(f" 監聽範圍：所有文字頻道均可觸發")
+    print(f" 展開書卡：所有文字頻道均會展開")
+    print(f" 試算表同步頻道：已設定為 [{SYNC_CHANNELS}]")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
 
@@ -298,7 +338,7 @@ async def on_message(message: discord.Message):
     platform, norm_url, book_id = norm_result
     history_key = f"{platform}:{book_id}"
 
-    # 2. 檢查是否已被推薦過 (賽博獵犬提醒：不顯示書卡，僅顯示前人討論跳轉連結)
+    # 2. 檢查是否已被推薦過 (賽博獵犬提醒：不顯示書卡，僅顯示前人討論跳轉連結與「我知錯了」撤回按鈕)
     prev_record = recommend_history.get(history_key)
     if prev_record:
         first_user = prev_record.get("author_name", "群友")
@@ -324,10 +364,12 @@ async def on_message(message: discord.Message):
             if book_data:
                 cache[history_key] = book_data
 
-    # 4. 發送書卡 (首次推薦，預設評級為「乾糧」)
+    # 4. 發送書卡 (所有頻道均會發送書卡；但僅指定頻道會同步進 Google 試算表)
     if book_data:
+        should_sync = is_sync_channel(message.channel)
+
         embed_reply = build_book_embed(book_data, message.author, evaluation="乾糧")
-        view = BookActionView(book_data, message.author, jump_url=message.jump_url)
+        view = BookActionView(book_data, message.author, jump_url=message.jump_url, should_sync=should_sync)
 
         sent_msg = await message.reply(
             embed=embed_reply,
@@ -341,8 +383,8 @@ async def on_message(message: discord.Message):
             "jump_url": sent_msg.jump_url
         }
 
-        # 自動同步寫入 Google 試算表 (自動去重)
-        if GOOGLE_SHEET_WEBHOOK_URL:
+        # 僅指定同步頻道 (如 懶人推書、推薦書單) 自動同步寫入 Google 試算表
+        if should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
                 GOOGLE_SHEET_WEBHOOK_URL,
                 book_data,
