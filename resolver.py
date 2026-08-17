@@ -4,9 +4,9 @@ import aiohttp
 import opencc
 from typing import Optional, Dict, Any
 
-# 簡繁轉換器
-s2t_converter = opencc.OpenCC('s2t.json')
-t2s_converter = opencc.OpenCC('t2s.json')
+# 簡繁轉換器 (opencc-python-reimplemented 傳入 's2t' 與 't2s')
+s2t_converter = opencc.OpenCC('s2t')
+t2s_converter = opencc.OpenCC('t2s')
 
 PLATFORM_NAMES = {
     "qidian": "起點中文網",
@@ -67,7 +67,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                 
                 # 1. 起點中文網
                 if platform == "qidian":
-                    # 標題常見格式: 《書名》_作者_起點中文網
                     title_match = re.search(r'《?(.*?)》?_(.*?)(?:_起[點点]中文[網网]|$)', raw_title)
                     if title_match:
                         title_clean = title_match.group(1).strip()
@@ -75,11 +74,9 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         title_clean = raw_title.replace("起點中文網", "").replace("起点中文网", "").strip(" _-|")
                     
-                    # 抓取字數與狀態標籤
-                    meta_tags = re.findall(r'(\d+(?:\.\d+)?(?:萬|万)?字|連載|完本|連載中|連載|VIP|簽約|輕小說|玄幻|都市|仙俠|科幻|歷史|遊戲)', content)
+                    meta_tags = re.findall(r'(\d+(?:\.\d+)?(?:萬|万)?字|連載|完本|連載中|VIP|簽約|輕小說|玄幻|都市|仙俠|科幻|歷史|遊戲)', content)
                     if meta_tags:
                         unique_tags = list(dict.fromkeys(meta_tags))
-                        # 挑出字數
                         word_items = [t for t in unique_tags if "字" in t]
                         if word_items:
                             stats = f"{word_items[0]}"
@@ -89,7 +86,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
 
                 # 2. 番茄小說 (包含 keyword)
                 elif platform in ["fanqie", "fanqie_keyword"]:
-                    # 標題格式: 書名-作者-番茄小說
                     title_match = re.search(r'(.*?)-(.*?)-(?:番茄小[說说]|$)', raw_title)
                     if title_match:
                         title_clean = title_match.group(1).strip()
@@ -97,7 +93,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         title_clean = raw_title.replace("番茄小說", "").replace("番茄小说", "").strip(" -_|")
                     
-                    # 抓取番茄的字數、在讀與標籤
                     word_match = re.search(r'(\d+(?:\.\d+)?(?:萬|万)?字)', content)
                     read_match = re.search(r'(\d+(?:\.\d+)?(?:萬|万)?人在[讀读])', content)
                     stat_parts = []
@@ -108,14 +103,12 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if stat_parts:
                         stats = " ｜ ".join(stat_parts)
                     
-                    # 抓取標籤 (男頻、穿越、都市等)
                     tag_matches = re.findall(r'([^\s\n\|]{2,8}(?:・|·)[^\s\n\|]{2,8})', content)
                     if tag_matches:
                         tags = tag_matches[0].replace("·", "・")
 
                 # 3. 刺蝟貓
                 elif platform == "ciweimao":
-                    # 標題格式: 書名_作者_刺蝟貓
                     title_match = re.search(r'(.*?)_(.*?)(?:_刺[蝟猬][貓猫]|$)', raw_title)
                     if title_match:
                         title_clean = title_match.group(1).strip()
@@ -123,7 +116,6 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         title_clean = raw_title.replace("刺蝟貓", "").replace("刺猬猫", "").strip(" _-|")
                     
-                    # 抓取刺蝟貓字數與點擊
                     word_match = re.search(r'(\d+(?:\.\d+)?(?:萬|万)?字|\d+字)', content)
                     if word_match:
                         stats = word_match.group(1)
@@ -132,17 +124,15 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     if tag_matches:
                         tags = tag_matches[0].strip().replace(" ", "・").replace(",", "・")
 
-                # 簡介提取 (優先採用 description，若太短則從 content 擷取)
+                # 簡介提取 (完整呈現)
                 description = raw_desc.strip()
                 if len(description) < 30 and content:
-                    # 尋找「簡介」後面的段落
                     desc_split = re.split(r'(?:作品簡介|內容簡介|簡介|简介)[：:\s]*\n', content)
                     if len(desc_split) > 1:
                         description = desc_split[1].split("\n\n目錄")[0].split("\n\n章节")[0].strip()
                     else:
                         description = content[:800].strip()
 
-                # 去除 Discord 字符上限 (安全上限 3500 字，完整顯示)
                 if len(description) > 3500:
                     description = description[:3500] + "..."
 
