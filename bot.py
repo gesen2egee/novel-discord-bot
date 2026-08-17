@@ -15,7 +15,7 @@ JINA_API_KEY = os.getenv("JINA_API_KEY")
 
 # Google 試算表設定 (選填)
 GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
-GOOGLE_SHEET_VIEW_URL = os.getenv("GOOGLE_SHEET_VIEW_URL")  # 試算表共用瀏覽連結
+GOOGLE_SHEET_VIEW_URL = os.getenv("GOOGLE_SHEET_VIEW_URL")
 
 # 初始化快取 (最多快取 200 本書，有效期 10 分鐘)
 cache = TTLCache(maxsize=200, ttl=600)
@@ -28,7 +28,7 @@ bot = commands.Bot(command_prefix="!", intents=intents)
 def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bool = True) -> discord.Embed:
     """
     組裝 Discord 小說 Embed 卡片。
-    is_recommended: True (推薦，藍色) / False (不推薦/避雷，警戒紅色)
+    維持乾淨優雅的藍色卡片邊框與標準標題，僅在頂部狀態與評價標記差異。
     """
     info_lines = []
     
@@ -36,8 +36,8 @@ def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bo
     if book_data.get("title_s"):
         info_lines.append(f"🔤 **簡體原名**：`{book_data['title_s']}`")
     
-    # 推薦人、作者、數據與標籤
-    eval_text = "👍 推薦" if is_recommended else "⚠️ 不推薦 / 避雷"
+    # 分享人、評價、作者、數據與標籤
+    eval_text = "👍 推薦" if is_recommended else "⚠️ 不推薦"
     info_lines.append(f"📢 **分享人**：{author.mention} ｜ **評價**：**{eval_text}**")
     info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
     info_lines.append(f"🏷️ **標籤分類**：{book_data.get('tags', '作品標籤')}")
@@ -47,25 +47,21 @@ def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bo
 
     description_text = "\n".join(info_lines)
 
-    # 安全邊界保護 (Discord description 上限 4096)
+    # 安全邊界保護
     if len(description_text) > 4000:
         description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
 
-    # 標題與主題顏色切換
+    # 頂部狀態文字
     if is_recommended:
-        card_title = f"📖 [{book_data['platform']}] {book_data['title_t']}"
-        card_color = discord.Color.from_rgb(52, 152, 219)  # 藍色
         author_text = f"由 {author.display_name} 推薦"
     else:
-        card_title = f"⚠️ [不推薦/避雷] [{book_data['platform']}] {book_data['title_t']}"
-        card_color = discord.Color.from_rgb(231, 76, 60)   # 警戒紅
-        author_text = f"由 {author.display_name} 標記為：⚠️ 不推薦 / 避雷"
+        author_text = f"由 {author.display_name} 分享（⚠️ 不推薦）"
 
     embed = discord.Embed(
-        title=card_title,
+        title=f"📖 [{book_data['platform']}] {book_data['title_t']}",
         url=book_data["url"],
         description=description_text,
-        color=card_color
+        color=discord.Color.from_rgb(52, 152, 219)  # 保持優雅藍色
     )
 
     # 頂部 Author
@@ -82,7 +78,7 @@ def build_book_embed(book_data: dict, author: discord.Member, is_recommended: bo
     return embed
 
 class BookActionView(discord.ui.View):
-    """卡片互動按鈕：切換推薦狀態、查看試算表、限定原發文者刪除"""
+    """卡片互動按鈕：切換評價 (發文者專屬)、原發文者專屬刪除、查看線上試算表"""
     def __init__(self, book_data: dict, original_author: discord.Member, jump_url: str = ""):
         super().__init__(timeout=None)
         self.book_data = book_data
@@ -90,7 +86,6 @@ class BookActionView(discord.ui.View):
         self.jump_url = jump_url
         self.is_recommended = True
 
-        # 如果有設定 Google 試算表瀏覽連結，加入跳轉按鈕
         if GOOGLE_SHEET_VIEW_URL:
             self.add_item(discord.ui.Button(
                 label="📊 查看線上書單",
@@ -98,23 +93,23 @@ class BookActionView(discord.ui.View):
                 row=0
             ))
 
-    @discord.ui.button(label="👎 改為不推薦/避雷", style=discord.ButtonStyle.secondary, custom_id="toggle_eval_btn", row=0)
+    @discord.ui.button(label="👎 改為不推薦", style=discord.ButtonStyle.secondary, custom_id="toggle_eval_btn", row=0)
     async def toggle_evaluation(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 只有原發文者可以切換評價
+        # 嚴格驗證：只有發文者本人可以切換評價
         if interaction.user.id != self.original_author.id:
-            await interaction.response.send_message("❌ 只有分享此書籍的原作者才能修改評價狀態喔！", ephemeral=True)
+            await interaction.response.send_message("❌ 只有發布此網址的原作者才可以修改評價狀態喔！", ephemeral=True)
             return
 
         # 切換狀態
         self.is_recommended = not self.is_recommended
         if self.is_recommended:
-            button.label = "👎 改為不推薦/避雷"
+            button.label = "👎 改為不推薦"
             button.style = discord.ButtonStyle.secondary
             eval_status = "推薦"
         else:
             button.label = "👍 改為推薦"
-            button.style = discord.ButtonStyle.success
-            eval_status = "不推薦/避雷"
+            button.style = discord.ButtonStyle.secondary
+            eval_status = "不推薦"
 
         # 重新生成 Embed 並更新卡片
         new_embed = build_book_embed(self.book_data, self.original_author, self.is_recommended)
@@ -132,12 +127,11 @@ class BookActionView(discord.ui.View):
 
     @discord.ui.button(label="🗑️ 刪除書卡", style=discord.ButtonStyle.danger, custom_id="delete_card_btn", row=0)
     async def delete_card(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # 嚴格驗證：只有發文者本人才可以使用刪除功能
+        # 嚴格驗證：只有發文者本人才可以刪除
         if interaction.user.id != self.original_author.id:
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以刪除這張書卡喔！", ephemeral=True)
             return
 
-        # 發文者本人確認刪除，直接撤回訊息
         await interaction.message.delete()
 
 @bot.event
@@ -147,7 +141,7 @@ async def on_ready():
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
     print(f" 簡介模式：100% 完整簡介顯示 (Embed Description 模式)")
-    print(f" 互動功能：評價切換 (推薦/不推薦) ｜ 原發文者專屬刪除")
+    print(f" 權限控制：評價切換與刪除均嚴格限定原發文者")
     if GOOGLE_SHEET_WEBHOOK_URL:
         print(f" Google 試算表同步：已啟用")
     print(f"==================================================")
