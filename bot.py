@@ -6,6 +6,7 @@ from cachetools import TTLCache
 
 from normalizer import normalize_novel_url
 from resolver import fetch_novel_info
+from sheets_sync import sync_to_google_sheet
 
 # 載入環境變數
 load_dotenv()
@@ -15,6 +16,9 @@ JINA_API_KEY = os.getenv("JINA_API_KEY")
 # 推書彙整頻道設定 (可填頻道 ID 或頻道名稱關鍵字)
 RECOMMEND_CHANNEL_ID = os.getenv("RECOMMEND_CHANNEL_ID")
 RECOMMEND_CHANNEL_NAME = os.getenv("RECOMMEND_CHANNEL_NAME", "推書彙整")
+
+# Google 試算表 Webhook 網址 (選填)
+GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 
 # 初始化快取 (最多快取 200 本書，有效期 10 分鐘)
 cache = TTLCache(maxsize=200, ttl=600)
@@ -29,7 +33,6 @@ def build_book_embed(book_data: dict, author: discord.Member, original_msg_url: 
     組裝精美的 Discord 小說 Embed 卡片。
     使用 Embed.description 承載完整簡介 (支援高達 4096 字元，確保 100% 完整呈現不被截斷)。
     """
-    # 組合卡片內文資訊
     info_lines = []
     
     # 雙行書名：簡體原名
@@ -46,7 +49,7 @@ def build_book_embed(book_data: dict, author: discord.Member, original_msg_url: 
 
     description_text = "\n".join(info_lines)
 
-    # 安全邊界保護 (Discord description 上限 4096，保留安全餘量)
+    # 安全邊界保護
     if len(description_text) > 4000:
         description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
 
@@ -79,13 +82,11 @@ async def find_recommend_channel(guild: discord.Guild) -> discord.TextChannel:
     if not guild:
         return None
 
-    # 1. 優先使用指定的 RECOMMEND_CHANNEL_ID
     if RECOMMEND_CHANNEL_ID and RECOMMEND_CHANNEL_ID.isdigit():
         target = guild.get_channel(int(RECOMMEND_CHANNEL_ID))
         if target:
             return target
 
-    # 2. 自動按名稱關鍵字尋找 (如「推書彙整」、「推書」或「book-recommend」)
     for channel in guild.text_channels:
         if RECOMMEND_CHANNEL_NAME in channel.name or "推書" in channel.name or "book-recommend" in channel.name:
             return channel
@@ -99,7 +100,9 @@ async def on_ready():
     print(f" 機器人名稱：{bot.user.name} ({bot.user.id})")
     print(f" 支援平台：起點中文網 ｜ 番茄小說 ｜ 刺蝟貓")
     print(f" 簡介模式：100% 完整簡介顯示 (Embed Description 模式)")
-    print(f" 自動轉發功能：已啟用 (目標頻道名稱關鍵字: {RECOMMEND_CHANNEL_NAME})")
+    print(f" 自動轉發功能：已啟用 (目標頻道: {RECOMMEND_CHANNEL_NAME})")
+    if GOOGLE_SHEET_WEBHOOK_URL:
+        print(f" Google 試算表同步：已啟用")
     print(f"==================================================")
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 ＆ 自動彙整書單"))
 
@@ -130,13 +133,13 @@ async def on_message(message: discord.Message):
             if book_data:
                 cache[cache_key] = book_data
 
-    # 3. 回覆原頻道與轉發至「推書彙整」頻道
+    # 3. 回覆原頻道、轉發推書頻道與同步 Google 試算表
     if book_data:
         # A. 原頻道回覆 Embed
         embed_reply = build_book_embed(book_data, message.author)
         sent_msg = await message.reply(embed=embed_reply, mention_author=False)
 
-        # B. 自動轉發至專屬「📚-推書彙整」頻道 (若伺服器有此頻道且不在該頻道內)
+        # B. 自動轉發至專屬「📚-推書彙整」頻道
         if message.guild:
             rec_channel = await find_recommend_channel(message.guild)
             if rec_channel and rec_channel.id != message.channel.id:
@@ -148,6 +151,10 @@ async def on_message(message: discord.Message):
                     )
                 except Exception as e:
                     print(f"[轉發失敗] 無法轉發至 #{rec_channel.name}: {e}")
+
+        # C. 自動同步寫入 Google 試算表 (若有設定 Webhook)
+        if GOOGLE_SHEET_WEBHOOK_URL:
+            await sync_to_google_sheet(GOOGLE_SHEET_WEBHOOK_URL, book_data, message.author.display_name)
 
     await bot.process_commands(message)
 
