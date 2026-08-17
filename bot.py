@@ -2,6 +2,7 @@ import os
 import re
 import csv
 import io
+import urllib.parse
 import asyncio
 import aiohttp
 from aiohttp import web
@@ -150,7 +151,9 @@ def build_book_embed(book_data: dict, author: discord.Member, evaluation: str = 
     info_lines = []
     
     if book_data.get("title_s"):
-        info_lines.append(f"🔤 **簡體原名**：`{book_data['title_s']}`")
+        encoded_title = urllib.parse.quote_plus(book_data["title_s"])
+        search_url = f"https://www.google.com/search?q={encoded_title}"
+        info_lines.append(f"🔤 **簡體原名**：[{book_data['title_s']}]({search_url}) 🔍")
     
     if is_sync_channel:
         if evaluation == "糧草":
