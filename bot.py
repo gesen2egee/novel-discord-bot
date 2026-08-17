@@ -1,5 +1,9 @@
 import os
+import re
+import csv
+import io
 import asyncio
+import aiohttp
 from aiohttp import web
 import discord
 from discord.ext import commands
@@ -51,6 +55,60 @@ async def start_web_server():
     await site.start()
     print(f" Web 健康檢查端口已在 Port {PORT} 啟動")
 # -----------------------------------------------------------
+
+async def load_history_from_google_sheet() -> int:
+    """
+    從 Google 試算表公開檢視連結下載並載入歷史推薦資料至 recommend_history。
+    確保賽博獵犬能 100% 依據 Google 試算表上的記錄判定。
+    """
+    if not GOOGLE_SHEET_VIEW_URL or "docs.google.com/spreadsheets" not in GOOGLE_SHEET_VIEW_URL:
+        return 0
+
+    match = re.search(r"/spreadsheets/d/([a-zA-Z0-9-_]+)", GOOGLE_SHEET_VIEW_URL)
+    if not match:
+        return 0
+
+    sheet_id = match.group(1)
+    gid_match = re.search(r"[#&]gid=([0-9]+)", GOOGLE_SHEET_VIEW_URL)
+    gid = gid_match.group(1) if gid_match else "0"
+
+    csv_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+
+    count = 0
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(csv_url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                if resp.status == 200:
+                    text = await resp.text(encoding="utf-8")
+                    reader = csv.reader(io.StringIO(text))
+                    rows = list(reader)
+                    if not rows:
+                        return 0
+
+                    # 欄位定義: 推薦時間(0) | 繁體書名(1) | 簡體原名(2) | 推薦人(3) | 平台(4) | 作者(5) | 小說網址(6) | DC討論原文(7) | 是否推薦(8)
+                    for row in rows[1:]:
+                        if len(row) <= 6:
+                            continue
+                        novel_url = row[6].strip()
+                        recommender = row[3].strip() if len(row) > 3 else "群友"
+                        jump_url = row[7].strip() if len(row) > 7 else ""
+
+                        if novel_url:
+                            norm_res = await normalize_novel_url(novel_url)
+                            if norm_res:
+                                platform, _, book_id = norm_res
+                                history_key = f"{platform}:{book_id}"
+                                recommend_history[history_key] = {
+                                    "author_name": recommender,
+                                    "jump_url": jump_url
+                                }
+                                count += 1
+                    print(f"📊 [Google Sheets] 成功載入 {count} 本歷史小說至賽博獵犬庫！")
+                else:
+                    print(f"⚠️ [Google Sheets] 無法直接讀取試算表 CSV (HTTP {resp.status})，請確認試算表共用權限設為「任何知道連結的使用者均可檢視」。")
+    except Exception as e:
+        print(f"⚠️ [Google Sheets] 載入歷史資料發生例外: {e}")
+    return count
 
 def is_sync_channel(channel) -> bool:
     """
@@ -224,6 +282,7 @@ class BookActionView(discord.ui.View):
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以刪除這張書卡喔！", ephemeral=True)
             return
 
+        # 僅刪除 Discord 書卡訊息，保持不影響 Google 試算表紀錄
         await interaction.message.delete()
 
 class CyberHoundView(discord.ui.View):
@@ -249,7 +308,20 @@ async def on_ready():
     print(f" 展開書卡：所有文字頻道均會展開")
     print(f" 試算表同步頻道：已設定為 [{SYNC_CHANNELS}]")
     print(f"==================================================")
+    
+    # 啟動時自動從 Google 試算表載入歷史資料至獵犬庫
+    await load_history_from_google_sheet()
+    
     await bot.change_presence(activity=discord.Game(name="監聽小說網址 (起點/番茄/刺蝟貓)"))
+
+# ----------------- 手動重新載入 Google 試算表歷史指令 -----------------
+@bot.command(name="同步表單", aliases=["reload_sheet", "sync_sheet"])
+@commands.has_permissions(administrator=True)
+async def reload_sheet_command(ctx: commands.Context):
+    """管理員指令：立即從 Google 試算表重新載入推書資料至賽博獵犬庫"""
+    msg = await ctx.reply("⏳ 正在從 Google 試算表載入最新推書資料...")
+    count = await load_history_from_google_sheet()
+    await msg.edit(content=f"✅ **同步完成！**\n已從 Google 試算表成功載入 **{count}** 本小說至賽博獵犬庫！")
 
 # ----------------- 管理員回溯歷史舊文章指令 -----------------
 @bot.command(name="掃描歷史", aliases=["scan", "backfill"])
@@ -323,7 +395,7 @@ async def on_message(message: discord.Message):
     if message.author.bot:
         return
 
-    # 先處理指令 (如 !掃描歷史)
+    # 先處理指令 (如 !掃描歷史, !同步表單)
     await bot.process_commands(message)
 
     content = message.content.strip()
@@ -338,9 +410,12 @@ async def on_message(message: discord.Message):
     platform, norm_url, book_id = norm_result
     history_key = f"{platform}:{book_id}"
 
-    # 2. 檢查是否已被推薦過 (賽博獵犬提醒：不顯示書卡，僅顯示前人討論跳轉連結與「我知錯了」撤回按鈕)
+    # 判斷當前是否為推書指定同步頻道 (如 懶人推書、推薦書單)
+    should_sync = is_sync_channel(message.channel)
+
+    # 2. 檢查是否已被推薦過 (只有在指定推書頻道才會觸發賽博獵犬；其他聊天頻道一律正常展開書卡)
     prev_record = recommend_history.get(history_key)
-    if prev_record:
+    if should_sync and prev_record:
         first_user = prev_record.get("author_name", "群友")
         first_url = prev_record.get("jump_url", "")
         if first_url:
@@ -364,10 +439,8 @@ async def on_message(message: discord.Message):
             if book_data:
                 cache[history_key] = book_data
 
-    # 4. 發送書卡 (所有頻道均會發送書卡；但僅指定頻道會同步進 Google 試算表)
+    # 4. 發送書卡 (所有頻道均會發送書卡；但僅指定推書頻道會同步進 Google 試算表與更新獵犬庫)
     if book_data:
-        should_sync = is_sync_channel(message.channel)
-
         embed_reply = build_book_embed(book_data, message.author, evaluation="乾糧")
         view = BookActionView(book_data, message.author, jump_url=message.jump_url, should_sync=should_sync)
 
@@ -378,20 +451,21 @@ async def on_message(message: discord.Message):
         )
         view.jump_url = sent_msg.jump_url
 
-        recommend_history[history_key] = {
-            "author_name": message.author.display_name,
-            "jump_url": sent_msg.jump_url
-        }
+        # 若在指定推書頻道，記錄至獵犬歷史庫並同步 Google 試算表
+        if should_sync:
+            recommend_history[history_key] = {
+                "author_name": message.author.display_name,
+                "jump_url": sent_msg.jump_url
+            }
 
-        # 僅指定同步頻道 (如 懶人推書、推薦書單) 自動同步寫入 Google 試算表
-        if should_sync and GOOGLE_SHEET_WEBHOOK_URL:
-            await sync_to_google_sheet(
-                GOOGLE_SHEET_WEBHOOK_URL,
-                book_data,
-                message.author.display_name,
-                sent_msg.jump_url,
-                status="乾糧"
-            )
+            if GOOGLE_SHEET_WEBHOOK_URL:
+                await sync_to_google_sheet(
+                    GOOGLE_SHEET_WEBHOOK_URL,
+                    book_data,
+                    message.author.display_name,
+                    sent_msg.jump_url,
+                    status="乾糧"
+                )
 
 async def main():
     if not DISCORD_TOKEN or DISCORD_TOKEN == "YOUR_DISCORD_BOT_TOKEN_HERE":
