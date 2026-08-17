@@ -116,11 +116,15 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                 # =========================================================================
                 if platform == "qidian":
                     title_clean = re.sub(r'(_起[點点]中文[網网]|_閱文集團).*$', '', raw_title).strip(" _-|《》")
-                    # 若標題被清空或為通用站名，從 content 提取真實書名
-                    if not title_clean or title_clean in ["起点中文网", "起點中文網", "起点读书", "起点女生网"]:
+                    # 若標題被清空或為通用站名，從 content 或 raw_desc 提取真實書名
+                    if not title_clean or title_clean in ["起点中文网", "起點中文網", "起点读书", "起点女生网", "全部分类"]:
                         t_match = re.search(r'(?:^|\n)#+\s*([^\n\r#\[\]]+?)(?:\s+在线阅读|\s+更新时间|\s*\n|\Z)', content)
                         if t_match and t_match.group(1).strip() not in ["起点中文网", "全部分类", "作品信息"]:
                             title_clean = t_match.group(1).strip()
+                        elif raw_desc:
+                            book_in_desc = re.search(r'《([^》]+)》', raw_desc)
+                            if book_in_desc:
+                                title_clean = book_in_desc.group(1).strip()
                     
                     author_match = re.search(r'(?:作者[：:\s]*|##\s*\[?)([^\s\n\r\]\(\)_]+)(?:\]|\s*更新時間|\s*更新时间|\s*著|\s*閱文|\s*阅文)', content)
                     if author_match and author_match.group(1) not in ["作品信息", "最新章节", "起点中文网"]:
@@ -129,6 +133,10 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                         a_m = re.search(r'作者[：:]\s*([^\s\n\r]+)', content)
                         if a_m:
                             author = a_m.group(1).strip()
+                        elif raw_desc:
+                            author_in_desc = re.search(r'([^\s\n\r]+?)(?:创作的|著的|所著)', raw_desc)
+                            if author_in_desc:
+                                author = author_in_desc.group(1).strip()
 
                     word_match = re.search(r'(_?(\d+(?:\.\d+)?(?:萬|万)?)_?\s*字)', content)
                     if word_match:
@@ -140,7 +148,7 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         tags = "連載・作品推薦"
 
-                    # 簡介提取 (優先抓取 ## 作品簡介；若無則抓取標籤下方精華簡介)
+                    # 簡介提取 (優先抓取 ## 作品簡介；若無則抓取標籤下方精華簡介；最後從 raw_desc 提純)
                     desc_match = re.search(r'##\s*作品[簡简]介\s*\n+(.*?)(?:\n+####|\n+##|\n+\[月票\]|\n+目录|\n+目錄|\Z)', content, re.DOTALL)
                     if desc_match and desc_match.group(1).strip():
                         description = desc_match.group(1).strip()
@@ -148,6 +156,10 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                         sub_desc = re.search(r'(?:连载|完本|签约|VIP|免费)[^\n]*\n+\s*(.*?)(?:\n+_\d+|\n+\[免费试读\]|\n+##|\n+####|\Z)', content, re.DOTALL)
                         if sub_desc and sub_desc.group(1).strip():
                             description = sub_desc.group(1).strip()
+                        elif raw_desc:
+                            # 從 raw_desc 提純（過濾開頭的 "xxx创作的小说...最新章节:xxx。"）
+                            desc_clean_m = re.search(r'最新章节[：:][^\n\r。]+[。|\n]\s*(.*)', raw_desc, re.DOTALL)
+                            description = desc_clean_m.group(1).strip() if desc_clean_m else raw_desc
                         else:
                             description = raw_desc
 

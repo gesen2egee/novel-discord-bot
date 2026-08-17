@@ -709,6 +709,17 @@ async def scan_history_error(ctx: commands.Context, error):
         await ctx.reply("❌ 此歷史回溯指令只有**伺服器管理員**可以使用喔！")
 # -----------------------------------------------------------
 
+def is_valid_book_data(data: dict) -> bool:
+    """檢查抓取的小說資料是否完整有效 (書名不可空白或站名，作者不可未知)"""
+    if not data or not isinstance(data, dict):
+        return False
+    title = data.get("title_t", "").strip()
+    if not title or title in ["起点中文网", "起點中文網", "番茄小說", "番茄小说", "刺蝟貓", "刺猬猫", "小說平台", "全部分类"]:
+        return False
+    if data.get("author") in ["未知作者", "未知", ""]:
+        return False
+    return True
+
 @bot.event
 async def on_message(message: discord.Message):
     if message.author.bot:
@@ -764,12 +775,12 @@ async def on_message(message: discord.Message):
             concurrence_str = format_concurrence_text(upvoters, downvoters)
 
             book_data = cache.get(history_key)
-            if not book_data:
+            if not is_valid_book_data(book_data):
                 book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
-                if book_data:
+                if is_valid_book_data(book_data):
                     cache[history_key] = book_data
 
-            if book_data:
+            if is_valid_book_data(book_data):
                 await sync_to_google_sheet(
                     GOOGLE_SHEET_WEBHOOK_URL,
                     book_data,
@@ -780,16 +791,16 @@ async def on_message(message: discord.Message):
                 )
         return
 
-    # 3. 取得書籍資料
+    # 3. 取得書籍資料 (自動淘汰無效髒快取並強制重新爬取)
     book_data = cache.get(history_key)
-    if not book_data:
+    if not is_valid_book_data(book_data):
         async with message.channel.typing():
             book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
-            if book_data:
+            if is_valid_book_data(book_data):
                 cache[history_key] = book_data
 
     # 4. 發送書卡 (所有頻道均會發送書卡；但僅指定推書頻道會同步進 Google 試算表與更新獵犬庫)
-    if book_data:
+    if is_valid_book_data(book_data):
         embed_reply = build_book_embed(book_data, message.author, evaluation="乾糧", is_sync_channel=should_sync)
         view = BookActionView(book_data, message.author, jump_url=message.jump_url, should_sync=should_sync)
 
