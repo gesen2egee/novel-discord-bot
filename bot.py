@@ -105,8 +105,8 @@ async def load_history_from_google_sheet() -> int:
                                 if "同推" in part:
                                     names = part.replace("同推", "").strip().split(",")
                                     upvoters.extend([n.strip() for n in names if n.strip()])
-                                elif "不推" in part:
-                                    names = part.replace("不推", "").strip().split(",")
+                                elif "反推" in part or "不推" in part:
+                                    names = part.replace("反推", "").replace("不推", "").strip().split(",")
                                     downvoters.extend([n.strip() for n in names if n.strip()])
 
                         if novel_url:
@@ -210,11 +210,11 @@ def build_book_embed(
     info_lines.append(f"👤 **作者**：{book_data.get('author', '未知')} ｜ 📊 **數據**：{book_data.get('stats', '詳見官網')}")
     info_lines.append(f"🏷️ **標籤分類**：{book_data.get('tags', '作品標籤')}")
 
-    # 展示社群覆議 (同推 / 不推)
+    # 展示社群覆議 (同推 / 反推)
     if upvoters:
         info_lines.append(f"👥 **同推**：{', '.join(upvoters)}")
     if downvoters:
-        info_lines.append(f"🚫 **不推**：{', '.join(downvoters)}")
+        info_lines.append(f"🚫 **反推**：{', '.join(downvoters)}")
 
     info_lines.append("")
     info_lines.append("📝 **完整作品簡介**：")
@@ -274,8 +274,8 @@ def extract_card_state_from_message(message: discord.Message):
     up_m = re.search(r'👥 \*\*同推\*\*：([^\n\r]+)', desc)
     upvoters = [n.strip() for n in up_m.group(1).split(",") if n.strip()] if up_m else []
 
-    # 5. 提取不推名單
-    down_m = re.search(r'🚫 \*\*不推\*\*：([^\n\r]+)', desc)
+    # 5. 提取反推名單 (支援「反推」與舊格式「不推」)
+    down_m = re.search(r'🚫 \*\*(?:反推|不推)\*\*：([^\n\r]+)', desc)
     downvoters = [n.strip() for n in down_m.group(1).split(",") if n.strip()] if down_m else []
 
     # 6. 書籍基本資料還原
@@ -346,13 +346,13 @@ def format_concurrence_text(upvoters: list, downvoters: list) -> str:
     if upvoters:
         parts.append(f"{', '.join(upvoters)} 同推")
     if downvoters:
-        parts.append(f"{', '.join(downvoters)} 不推")
+        parts.append(f"{', '.join(downvoters)} 反推")
     return " ｜ ".join(parts)
 
 class BookActionView(discord.ui.View):
     """
     持久化卡片互動按鈕 (Persistent View)
-    支援機器人重新部署後，歷史舊書卡按鈕 100% 永久有效！
+    支援上下箭頭三級狀態切換（發書者 3 級、其他群友 3 級）
     """
     def __init__(
         self,
@@ -374,8 +374,8 @@ class BookActionView(discord.ui.View):
 
         # 若在發送時已確定是非推書頻道，動態移除評級切換按鈕
         if book_data is not None and not self.should_sync:
-            self.remove_item(self.toggle_tier)
-            self.remove_item(self.toggle_evaluation)
+            self.remove_item(self.vote_up)
+            self.remove_item(self.vote_down)
 
         if GOOGLE_SHEET_VIEW_URL:
             self.add_item(discord.ui.Button(
@@ -407,8 +407,8 @@ class BookActionView(discord.ui.View):
             "should_sync": should_sync
         }
 
-    @discord.ui.button(label="🔥 強力推薦", style=discord.ButtonStyle.primary, custom_id="toggle_tier_btn", row=0)
-    async def toggle_tier(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🔼 增加推薦", style=discord.ButtonStyle.primary, custom_id="vote_up_btn", row=0)
+    async def vote_up(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
             await interaction.response.send_message("❌ 無法讀取書卡狀態", ephemeral=True)
@@ -424,21 +424,15 @@ class BookActionView(discord.ui.View):
         jump_url = state["jump_url"]
         user_name = interaction.user.display_name
 
-        # 1. 若為原發文者：切換推薦等級 (糧草 <-> 乾糧)
+        # 1. 發書者：三級切換（不推薦 -> 乾糧 -> 糧草）
         if author_id is not None and interaction.user.id == author_id:
-            if evaluation == "糧草":
+            if evaluation == "不推薦":
                 evaluation = "乾糧"
-                button.label = "🔥 強力推薦"
-                button.style = discord.ButtonStyle.primary
-            else:
+            elif evaluation == "乾糧":
                 evaluation = "糧草"
-                button.label = "🌾 一般推薦"
-                button.style = discord.ButtonStyle.secondary
-
-            for child in self.children:
-                if getattr(child, "custom_id", None) == "toggle_eval_btn":
-                    child.label = "👎 改為不推薦"
-                    child.style = discord.ButtonStyle.secondary
+            else:
+                await interaction.response.send_message("🌟 目前已經是最高評價【🔥 強力推薦（糧草）】囉！", ephemeral=True)
+                return
 
             new_embed = build_book_embed(
                 book_data,
@@ -461,11 +455,16 @@ class BookActionView(discord.ui.View):
                 )
             return
 
-        # 2. 若為其他群友：覆議為「同推」(以最後狀態覆蓋)
+        # 2. 其他群友：三級切換（反推 -> 無 -> 同推）
         if user_name in downvoters:
             downvoters.remove(user_name)
-        if user_name not in upvoters:
+            msg_text = f"↩️ 已取消您對《{book_data.get('title_t', '')}》的反推！"
+        elif user_name not in upvoters:
             upvoters.append(user_name)
+            msg_text = f"✅ 已將您加入《{book_data.get('title_t', '')}》的「同推」名單！"
+        else:
+            await interaction.response.send_message(f"🌟 您已經在《{book_data.get('title_t', '')}》的「同推」名單中囉！", ephemeral=True)
+            return
 
         new_embed = build_book_embed(
             book_data,
@@ -476,7 +475,7 @@ class BookActionView(discord.ui.View):
             downvoters=downvoters
         )
         await interaction.response.edit_message(embed=new_embed, view=self)
-        await interaction.followup.send(f"✅ 您已成功加入《{book_data.get('title_t', '')}》的「同推」覆議！", ephemeral=True)
+        await interaction.followup.send(msg_text, ephemeral=True)
 
         if should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
@@ -488,8 +487,8 @@ class BookActionView(discord.ui.View):
                 concurrence=format_concurrence_text(upvoters, downvoters)
             )
 
-    @discord.ui.button(label="👎 改為不推薦", style=discord.ButtonStyle.secondary, custom_id="toggle_eval_btn", row=0)
-    async def toggle_evaluation(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="🔽 減少推薦", style=discord.ButtonStyle.secondary, custom_id="vote_down_btn", row=0)
+    async def vote_down(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
             await interaction.response.send_message("❌ 無法讀取書卡狀態", ephemeral=True)
@@ -505,20 +504,15 @@ class BookActionView(discord.ui.View):
         jump_url = state["jump_url"]
         user_name = interaction.user.display_name
 
-        # 1. 若為原發文者：切換為不推薦 / 恢復推薦
+        # 1. 發書者：三級切換（糧草 -> 乾糧 -> 不推薦）
         if author_id is not None and interaction.user.id == author_id:
-            if evaluation != "不推薦":
+            if evaluation == "糧草":
+                evaluation = "乾糧"
+            elif evaluation == "乾糧":
                 evaluation = "不推薦"
-                button.label = "👍 恢復推薦"
-                button.style = discord.ButtonStyle.success
             else:
-                tier_btn = next((c for c in self.children if getattr(c, "custom_id", None) == "toggle_tier_btn"), None)
-                if tier_btn and tier_btn.label == "🌾 一般推薦":
-                    evaluation = "糧草"
-                else:
-                    evaluation = "乾糧"
-                button.label = "👎 改為不推薦"
-                button.style = discord.ButtonStyle.secondary
+                await interaction.response.send_message("⚠️ 目前已經是【⚠️ 不推薦】狀態囉！", ephemeral=True)
+                return
 
             new_embed = build_book_embed(
                 book_data,
@@ -541,11 +535,16 @@ class BookActionView(discord.ui.View):
                 )
             return
 
-        # 2. 若為其他群友：覆議為「不推」(以最後狀態覆蓋)
+        # 2. 其他群友：三級切換（同推 -> 無 -> 反推）
         if user_name in upvoters:
             upvoters.remove(user_name)
-        if user_name not in downvoters:
+            msg_text = f"↩️ 已取消您對《{book_data.get('title_t', '')}》的同推！"
+        elif user_name not in downvoters:
             downvoters.append(user_name)
+            msg_text = f"🚫 已將您加入《{book_data.get('title_t', '')}》的「反推」名單！"
+        else:
+            await interaction.response.send_message(f"⚠️ 您已經在《{book_data.get('title_t', '')}》的「反推」名單中囉！", ephemeral=True)
+            return
 
         new_embed = build_book_embed(
             book_data,
@@ -556,7 +555,7 @@ class BookActionView(discord.ui.View):
             downvoters=downvoters
         )
         await interaction.response.edit_message(embed=new_embed, view=self)
-        await interaction.followup.send(f"⚠️ 您已成功加入《{book_data.get('title_t', '')}》的「不推」覆議！", ephemeral=True)
+        await interaction.followup.send(msg_text, ephemeral=True)
 
         if should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
@@ -673,12 +672,12 @@ async def scan_history_command(ctx: commands.Context, limit: int = 100):
 
             # 抓取小說資料
             book_data = cache.get(history_key)
-            if not book_data:
+            if not is_valid_book_data(book_data):
                 book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
-                if book_data:
+                if is_valid_book_data(book_data):
                     cache[history_key] = book_data
 
-            if book_data:
+            if is_valid_book_data(book_data):
                 found_count += 1
                 # 記錄到獵犬庫
                 if history_key not in recommend_history:
