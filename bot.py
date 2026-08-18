@@ -411,7 +411,7 @@ class BookActionView(discord.ui.View):
     async def vote_up(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
-            await interaction.response.send_message("❌ 無法讀取書卡狀態", ephemeral=True)
+            await interaction.response.defer()
             return
 
         author_id = state["author_id"]
@@ -431,7 +431,7 @@ class BookActionView(discord.ui.View):
             elif evaluation == "乾糧":
                 evaluation = "糧草"
             else:
-                await interaction.response.send_message("🌟 目前已經是最高評價【🔥 強力推薦（糧草）】囉！", ephemeral=True)
+                await interaction.response.defer()
                 return
 
             new_embed = build_book_embed(
@@ -458,12 +458,10 @@ class BookActionView(discord.ui.View):
         # 2. 其他群友：三級切換（反推 -> 無 -> 同推）
         if user_name in downvoters:
             downvoters.remove(user_name)
-            msg_text = f"↩️ 已取消您對《{book_data.get('title_t', '')}》的反推！"
         elif user_name not in upvoters:
             upvoters.append(user_name)
-            msg_text = f"✅ 已將您加入《{book_data.get('title_t', '')}》的「同推」名單！"
         else:
-            await interaction.response.send_message(f"🌟 您已經在《{book_data.get('title_t', '')}》的「同推」名單中囉！", ephemeral=True)
+            await interaction.response.defer()
             return
 
         new_embed = build_book_embed(
@@ -475,7 +473,6 @@ class BookActionView(discord.ui.View):
             downvoters=downvoters
         )
         await interaction.response.edit_message(embed=new_embed, view=self)
-        await interaction.followup.send(msg_text, ephemeral=True)
 
         if should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
@@ -491,7 +488,7 @@ class BookActionView(discord.ui.View):
     async def vote_down(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
-            await interaction.response.send_message("❌ 無法讀取書卡狀態", ephemeral=True)
+            await interaction.response.defer()
             return
 
         author_id = state["author_id"]
@@ -511,7 +508,7 @@ class BookActionView(discord.ui.View):
             elif evaluation == "乾糧":
                 evaluation = "不推薦"
             else:
-                await interaction.response.send_message("⚠️ 目前已經是【⚠️ 不推薦】狀態囉！", ephemeral=True)
+                await interaction.response.defer()
                 return
 
             new_embed = build_book_embed(
@@ -538,12 +535,10 @@ class BookActionView(discord.ui.View):
         # 2. 其他群友：三級切換（同推 -> 無 -> 反推）
         if user_name in upvoters:
             upvoters.remove(user_name)
-            msg_text = f"↩️ 已取消您對《{book_data.get('title_t', '')}》的同推！"
         elif user_name not in downvoters:
             downvoters.append(user_name)
-            msg_text = f"🚫 已將您加入《{book_data.get('title_t', '')}》的「反推」名單！"
         else:
-            await interaction.response.send_message(f"⚠️ 您已經在《{book_data.get('title_t', '')}》的「反推」名單中囉！", ephemeral=True)
+            await interaction.response.defer()
             return
 
         new_embed = build_book_embed(
@@ -555,7 +550,6 @@ class BookActionView(discord.ui.View):
             downvoters=downvoters
         )
         await interaction.response.edit_message(embed=new_embed, view=self)
-        await interaction.followup.send(msg_text, ephemeral=True)
 
         if should_sync and GOOGLE_SHEET_WEBHOOK_URL:
             await sync_to_google_sheet(
