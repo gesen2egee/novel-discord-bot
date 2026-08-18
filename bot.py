@@ -225,8 +225,28 @@ def build_book_embed(
     if len(description_text) > 4000:
         description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
 
+    # 平台簡稱對應
+    platform_map = {
+        "起點中文網": "起點",
+        "起点中文网": "起點",
+        "起點": "起點",
+        "起点": "起點",
+        "qidian": "起點",
+        "番茄小說": "番茄",
+        "番茄小说": "番茄",
+        "番茄": "番茄",
+        "fanqie": "番茄",
+        "fanqie_keyword": "番茄",
+        "刺蝟貓": "刺蝟貓",
+        "刺猬猫": "刺蝟貓",
+        "ciweimao": "刺蝟貓"
+    }
+    raw_platform = book_data.get("platform", "小說平台")
+    short_platform = platform_map.get(raw_platform, raw_platform)
+    embed_title = f"📖 {book_data['title_t']} ({short_platform})"
+
     embed = discord.Embed(
-        title=f"📖 [{book_data['platform']}] {book_data['title_t']}",
+        title=embed_title,
         url=book_data["url"],
         description=description_text,
         color=embed_color
@@ -278,13 +298,18 @@ def extract_card_state_from_message(message: discord.Message):
     down_m = re.search(r'🚫 \*\*(?:反推|不推)\*\*：([^\n\r]+)', desc)
     downvoters = [n.strip() for n in down_m.group(1).split(",") if n.strip()] if down_m else []
 
-    # 6. 書籍基本資料還原
+    # 6. 書籍基本資料還原 (支援新格式: 📖 書名 (起點) 與舊格式: 📖 [起點中文網] 書名)
     raw_title = embed.title or "書籍分享"
-    title_clean = re.sub(r'^📖\s*\[[^\]]+\]\s*', '', raw_title).strip()
-    platform = "小說平台"
-    p_m = re.search(r'^📖\s*\[([^\]]+)\]', raw_title)
-    if p_m:
-        platform = p_m.group(1)
+    title_m = re.search(r'^📖\s*(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)$', raw_title)
+    if title_m:
+        title_clean = title_m.group(1).strip()
+        platform = title_m.group(2).strip()
+    else:
+        title_clean = re.sub(r'^📖\s*\[[^\]]+\]\s*', '', raw_title).strip()
+        platform = "小說平台"
+        p_m = re.search(r'^📖\s*\[([^\]]+)\]', raw_title)
+        if p_m:
+            platform = p_m.group(1)
 
     url = embed.url or ""
     cover = embed.thumbnail.url if embed.thumbnail else None
@@ -407,7 +432,7 @@ class BookActionView(discord.ui.View):
             "should_sync": should_sync
         }
 
-    @discord.ui.button(label="🔼 增加推薦", style=discord.ButtonStyle.primary, custom_id="vote_up_btn", row=0)
+    @discord.ui.button(label="🔼 增加推薦", style=discord.ButtonStyle.secondary, custom_id="vote_up_btn", row=0)
     async def vote_up(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
@@ -561,7 +586,7 @@ class BookActionView(discord.ui.View):
                 concurrence=format_concurrence_text(upvoters, downvoters)
             )
 
-    @discord.ui.button(label="🗑️ 刪除書卡", style=discord.ButtonStyle.danger, custom_id="delete_card_btn", row=0)
+    @discord.ui.button(label="🗑️ 刪除書卡", style=discord.ButtonStyle.secondary, custom_id="delete_card_btn", row=0)
     async def delete_card(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         author_id = state["author_id"] if state else (self.original_author.id if self.original_author else None)
@@ -617,7 +642,7 @@ class DeleteConfirmView(discord.ui.View):
 
         await interaction.response.edit_message(content="✅ 已成功刪除 Discord 上的書卡訊息！", view=None)
 
-    @discord.ui.button(label="🧹 同時從線上書單刪除", style=discord.ButtonStyle.danger, custom_id="delete_msg_and_sheet")
+    @discord.ui.button(label="🧹 同時從線上書單刪除", style=discord.ButtonStyle.secondary, custom_id="delete_msg_and_sheet")
     async def delete_msg_and_sheet(self, interaction: discord.Interaction, button: discord.ui.Button):
         if interaction.user.id != self.author_id:
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以操作喔！", ephemeral=True)
