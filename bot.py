@@ -190,9 +190,9 @@ def build_book_embed(
             eval_text = "🔥 強力推薦（糧草）"
             author_text = f"由 {author.display_name} 強力推薦"
             embed_color = discord.Color.from_rgb(230, 126, 34)  # 暖橙金
-        elif evaluation == "不推薦":
-            eval_text = "⚠️ 不推薦"
-            author_text = f"由 {author.display_name} 分享（⚠️ 不推薦）"
+        elif evaluation in ["改不推薦", "不推薦"]:
+            eval_text = "⚠️ 改不推薦"
+            author_text = f"由 {author.display_name} 分享（⚠️ 改不推薦）"
             embed_color = discord.Color.from_rgb(149, 165, 166)  # 灰色
         else:  # 乾糧（預設）
             eval_text = "🌾 一般推薦（乾糧）"
@@ -265,8 +265,8 @@ def extract_card_state_from_message(message: discord.Message):
     # 3. 提取當前評價
     if "🔥 強力推薦" in desc:
         evaluation = "糧草"
-    elif "⚠️ 不推薦" in desc:
-        evaluation = "不推薦"
+    elif "⚠️ 改不推薦" in desc or "⚠️ 不推薦" in desc:
+        evaluation = "改不推薦"
     else:
         evaluation = "乾糧"
 
@@ -424,9 +424,9 @@ class BookActionView(discord.ui.View):
         jump_url = state["jump_url"]
         user_name = interaction.user.display_name
 
-        # 1. 發書者：三級切換（不推薦 -> 乾糧 -> 糧草）
+        # 1. 發書者：三級切換（改不推薦 -> 乾糧 -> 糧草）
         if author_id is not None and interaction.user.id == author_id:
-            if evaluation == "不推薦":
+            if evaluation in ["改不推薦", "不推薦"]:
                 evaluation = "乾糧"
             elif evaluation == "乾糧":
                 evaluation = "糧草"
@@ -501,12 +501,12 @@ class BookActionView(discord.ui.View):
         jump_url = state["jump_url"]
         user_name = interaction.user.display_name
 
-        # 1. 發書者：三級切換（糧草 -> 乾糧 -> 不推薦）
+        # 1. 發書者：三級切換（糧草 -> 乾糧 -> 改不推薦）
         if author_id is not None and interaction.user.id == author_id:
             if evaluation == "糧草":
                 evaluation = "乾糧"
             elif evaluation == "乾糧":
-                evaluation = "不推薦"
+                evaluation = "改不推薦"
             else:
                 await interaction.response.defer()
                 return
