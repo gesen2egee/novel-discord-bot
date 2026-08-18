@@ -217,7 +217,7 @@ def build_book_embed(
         info_lines.append(f"🚫 **反推**：{', '.join(downvoters)}")
 
     info_lines.append("")
-    info_lines.append("📝 **完整作品簡介**：")
+    info_lines.append("### 📝 **作品簡介**")
     info_lines.append(book_data.get("description", "暫無簡介"))
 
     description_text = "\n".join(info_lines)
@@ -326,7 +326,7 @@ def extract_card_state_from_message(message: discord.Message):
     tags_m = re.search(r'🏷️ \*\*標籤分類\*\*：([^\n\r]+)', desc)
     tags = tags_m.group(1).strip() if tags_m else "作品標籤"
 
-    desc_split = desc.split("📝 **完整作品簡介**：")
+    desc_split = re.split(r'(?:###\s*)?📝 \*\*?(?:完整)?作品簡介\*\*?：?', desc)
     book_desc = desc_split[1].strip() if len(desc_split) > 1 else ""
 
     book_data = {
@@ -397,12 +397,12 @@ class BookActionView(discord.ui.View):
         self.upvoters = upvoters if upvoters is not None else []
         self.downvoters = downvoters if downvoters is not None else []
 
-        # 若在發送時已確定是非推書頻道，動態移除評級切換按鈕
+        # 若在發送時已確定是非推書頻道，移除推薦切換按鈕，且不加入查看書單按鈕 (僅保留刪除按鈕)
         if book_data is not None and not self.should_sync:
             self.remove_item(self.vote_up)
             self.remove_item(self.vote_down)
-
-        if GOOGLE_SHEET_VIEW_URL:
+        elif GOOGLE_SHEET_VIEW_URL:
+            # 僅推書頻道附帶查看線上書單
             self.add_item(discord.ui.Button(
                 label="📊 查看線上書單",
                 url=GOOGLE_SHEET_VIEW_URL,
