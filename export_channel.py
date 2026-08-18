@@ -8,15 +8,9 @@ from datetime import timezone, timedelta
 import discord
 from dotenv import load_dotenv
 
-from normalizer import normalize_novel_url
-from resolver import fetch_novel_info
-from sheets_sync import sync_to_google_sheet
-
 # 載入 .env 設定
 load_dotenv()
 DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
-JINA_API_KEY = os.getenv("JINA_API_KEY")
-GOOGLE_SHEET_WEBHOOK_URL = os.getenv("GOOGLE_SHEET_WEBHOOK_URL")
 
 # 設定台北時間 (UTC+8)
 TAIPEI_TZ = timezone(timedelta(hours=8))
@@ -62,9 +56,8 @@ async def process_channel_history(target_channel: discord.TextChannel):
     os.makedirs(images_dir, exist_ok=True)
 
     messages_data = []
-    novel_records = []
     scanned_count = 0
-    novel_count = 0
+    downloaded_images = 0
 
     timeout = aiohttp.ClientTimeout(total=30)
     async with aiohttp.ClientSession(timeout=timeout) as session:
@@ -76,8 +69,6 @@ async def process_channel_history(target_channel: discord.TextChannel):
             scanned_count += 1
             taipei_time = msg.created_at.astimezone(TAIPEI_TZ)
             time_str = taipei_time.strftime("%Y/%m/%d %H:%M:%S")
-            date_only_str = taipei_time.strftime("%Y/%m/%d")
-
             time_file_prefix = taipei_time.strftime("%Y%m%d_%H%M%S")
             safe_author = sanitize_filename(msg.author.display_name)
 
@@ -89,7 +80,9 @@ async def process_channel_history(target_channel: discord.TextChannel):
                 filepath = os.path.join(images_dir, filename)
                 
                 # 下載圖片
-                await download_attachment(session, att.url, filepath)
+                success = await download_attachment(session, att.url, filepath)
+                if success:
+                    downloaded_images += 1
                 attachments_info.append({
                     "filename": filename,
                     "original_filename": att.filename,
@@ -117,44 +110,14 @@ async def process_channel_history(target_channel: discord.TextChannel):
             }
             messages_data.append(msg_info)
 
-            # 檢查是否含有小說網址
-            content = msg.content.strip()
-            norm_result = await normalize_novel_url(content)
-            if norm_result:
-                platform, norm_url, book_id = norm_result
-                print(f"\n📖 [發現小說] {platform} ({book_id}) | 推薦人: {msg.author.display_name} | 時間: {date_only_str}")
-                
-                # 解析書籍詳細資料
-                book_data = await fetch_novel_info(platform, norm_url, JINA_API_KEY)
-                if book_data:
-                    novel_count += 1
-                    novel_records.append({
-                        "book_data": book_data,
-                        "recommender": msg.author.display_name,
-                        "jump_url": msg.jump_url,
-                        "date": date_only_str
-                    })
-                    print(f"   -> 書名: 《{book_data['title_t']}》 | 作者: {book_data['author']} | 字數: {book_data['stats']}")
-
-                    # 同步寫入 Google 試算表
-                    if GOOGLE_SHEET_WEBHOOK_URL:
-                        await sync_to_google_sheet(
-                            GOOGLE_SHEET_WEBHOOK_URL,
-                            book_data,
-                            msg.author.display_name,
-                            msg.jump_url,
-                            status="乾糧"
-                        )
-                        print(f"   -> ✅ 已成功同步至 Google 試算表！")
-
             # 即時進度顯示
             if scanned_count % 20 == 0:
-                print(f"⏳ 已掃描 {scanned_count} 則訊息... (已識別 {novel_count} 本小說)", end="\r")
+                print(f"⏳ 已掃描 {scanned_count} 則訊息... (已下載 {downloaded_images} 張圖片)", end="\r")
 
     print(f"\n\n======================================================")
-    print(f"🎉 頻道 【#{target_channel.name}】 抓取與分析完成！")
+    print(f"🎉 頻道 【#{target_channel.name}】 抓取完成！")
     print(f"📊 總掃描訊息數：{scanned_count} 則")
-    print(f"📚 成功提取並同步小說數：{novel_count} 本")
+    print(f"🖼️ 總下載圖片附件數：{downloaded_images} 個")
     print(f"======================================================")
 
     # 1. 輸出 JSON 檔案
