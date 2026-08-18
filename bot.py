@@ -566,13 +566,22 @@ class BookActionView(discord.ui.View):
         state = self._restore_state_if_needed(interaction)
         author_id = state["author_id"] if state else (self.original_author.id if self.original_author else None)
         book_data = state["book_data"] if state else self.book_data
+        should_sync = state["should_sync"] if state else self.should_sync
 
         # 僅原發文者有權刪除書卡
         if author_id is not None and interaction.user.id != author_id:
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以刪除這張書卡喔！", ephemeral=True)
             return
 
-        # 彈出發文者專屬私密確認選單
+        # 若在非推書頻道 (僅展開書卡，未寫入表單)，直接刪除訊息即可，無需彈出表單刪除選單
+        if not should_sync:
+            try:
+                await interaction.message.delete()
+            except Exception:
+                pass
+            return
+
+        # 若在推書頻道，彈出發文者專屬私密確認選單
         confirm_view = DeleteConfirmView(
             target_message=interaction.message,
             book_data=book_data,
@@ -628,15 +637,27 @@ class DeleteConfirmView(discord.ui.View):
                 title_t=self.book_data.get("title_t", "")
             )
 
-        # 3. 從推薦歷史與快取中移除
+        # 3. 徹底從推薦歷史 (賽博獵犬庫) 與快取中移除
         if self.book_data:
-            norm_res = await normalize_novel_url(self.book_data.get("url", ""))
+            url = self.book_data.get("url", "")
+            title_t = self.book_data.get("title_t", "")
+            
+            keys_to_remove = []
+            norm_res = await normalize_novel_url(url) if url else None
             if norm_res:
-                k = f"{norm_res[0]}:{norm_res[2]}"
+                target_key = f"{norm_res[0]}:{norm_res[2]}"
+                keys_to_remove.append(target_key)
+
+            # 同步檢查 recommend_history 中是否有匹配的書名或 jump_url
+            for k, val in list(recommend_history.items()):
+                if k in keys_to_remove or (url and url in val.get("jump_url", "")):
+                    keys_to_remove.append(k)
+
+            for k in set(keys_to_remove):
                 recommend_history.pop(k, None)
                 cache.pop(k, None)
 
-        await interaction.response.edit_message(content="✅ 已成功刪除 Discord 書卡，並同步從 Google 線上書單中移除！", view=None)
+        await interaction.response.edit_message(content="✅ 已成功刪除 Discord 書卡，並同步從 Google 線上書單與賽博獵犬紀錄中移除！", view=None)
 
     @discord.ui.button(label="❌ 取消", style=discord.ButtonStyle.secondary, custom_id="cancel_delete")
     async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):

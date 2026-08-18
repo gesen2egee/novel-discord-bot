@@ -64,15 +64,23 @@ function doPost(e) {
 
     // 0. 處理刪除請求 (Action: delete)
     if (data.action === "delete") {
-      var targetUrl = data.url ? data.url.trim().toLowerCase() : "";
-      var targetTitle = data.title_t ? data.title_t.trim() : "";
+      var targetUrl = data.url ? data.url.toString().trim().toLowerCase() : "";
+      var targetTitle = data.title_t ? data.title_t.toString().trim() : "";
       var deleted = false;
 
       for (var i = values.length - 1; i >= 1; i--) {
         var rowUrl = values[i][6] ? values[i][6].toString().trim().toLowerCase() : "";
         var rowTitle = values[i][1] ? values[i][1].toString().trim() : "";
-        if ((targetUrl && rowUrl === targetUrl) || (targetTitle && rowTitle === targetTitle)) {
-          sheet.deleteRow(i + 1);
+        
+        var isMatch = false;
+        if (targetUrl && (rowUrl === targetUrl || rowUrl.indexOf(targetUrl) !== -1 || targetUrl.indexOf(rowUrl) !== -1)) {
+          isMatch = true;
+        } else if (targetTitle && rowTitle === targetTitle) {
+          isMatch = true;
+        }
+
+        if (isMatch) {
+          sheet.deleteRow(i + 1); // 物理刪除整行，下方資料自然上移無縫隙
           deleted = true;
         }
       }
@@ -84,9 +92,12 @@ function doPost(e) {
     
     // 1. 去重比對：檢查第 7 欄 (小說網址) 或第 2 欄 (繁體書名)
     for (var i = 1; i < values.length; i++) {
-      var rowUrl = values[i][6];   // 第 7 欄: 小說網址
-      var rowTitle = values[i][1]; // 第 2 欄: 繁體書名
-      if (rowUrl === data.url || (data.title_t && rowTitle === data.title_t)) {
+      var rowUrl = values[i][6] ? values[i][6].toString().trim().toLowerCase() : "";
+      var rowTitle = values[i][1] ? values[i][1].toString().trim() : "";
+      var dataUrl = data.url ? data.url.toString().trim().toLowerCase() : "";
+      
+      if ((dataUrl && (rowUrl === dataUrl || rowUrl.indexOf(dataUrl) !== -1 || dataUrl.indexOf(rowUrl) !== -1)) ||
+          (data.title_t && rowTitle === data.title_t.toString().trim())) {
         existingRowIndex = i + 1;
         break;
       }
@@ -114,11 +125,9 @@ function doPost(e) {
         .setMimeType(ContentService.MimeType.JSON);
     }
     
-    // 3. 全新書籍寫入新列 (精準填入空白行)
-    var targetRow = values.length + 1;
-    if (values.length >= 2 && !values[1][1] && !values[1][6]) {
-      targetRow = 2;
-    }
+    // 3. 全新書籍寫入新列 (精準緊接在最後有效列後，絕不產生中間空行)
+    var lastRow = sheet.getLastRow();
+    var targetRow = (lastRow < 1) ? 2 : (lastRow + 1);
     
     var newRowData = [
       data.time || "",
