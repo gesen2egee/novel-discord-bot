@@ -78,17 +78,21 @@ async def process_channel_history(target_channel: discord.TextChannel):
             time_str = taipei_time.strftime("%Y/%m/%d %H:%M:%S")
             date_only_str = taipei_time.strftime("%Y/%m/%d")
 
+            time_file_prefix = taipei_time.strftime("%Y%m%d_%H%M%S")
+            safe_author = sanitize_filename(msg.author.display_name)
+
             # 處理附件/圖片下載
             attachments_info = []
             for att in msg.attachments:
                 safe_name = sanitize_filename(att.filename)
-                filename = f"{msg.id}_{safe_name}"
+                filename = f"{time_file_prefix}_{safe_author}_{msg.id}_{safe_name}"
                 filepath = os.path.join(images_dir, filename)
                 
                 # 下載圖片
                 await download_attachment(session, att.url, filepath)
                 attachments_info.append({
-                    "filename": att.filename,
+                    "filename": filename,
+                    "original_filename": att.filename,
                     "local_path": filepath,
                     "url": att.url
                 })
@@ -148,7 +152,7 @@ async def process_channel_history(target_channel: discord.TextChannel):
                 print(f"⏳ 已掃描 {scanned_count} 則訊息... (已識別 {novel_count} 本小說)", end="\r")
 
     print(f"\n\n======================================================")
-    print(f"🎉 抓取與分析完成！")
+    print(f"🎉 頻道 【#{target_channel.name}】 抓取與分析完成！")
     print(f"📊 總掃描訊息數：{scanned_count} 則")
     print(f"📚 成功提取並同步小說數：{novel_count} 本")
     print(f"======================================================")
@@ -183,6 +187,24 @@ async def process_channel_history(target_channel: discord.TextChannel):
     print(f"📁 歷史訊息 JSON 已儲存至：{json_path}")
     print(f"🖼️ 歷史截圖圖片已下載至：{images_dir}")
 
+def extract_channel_ids_from_input(text: str) -> list[int]:
+    """從輸入字串（支援純 ID、多個 ID 或 Discord 網址）解析出頻道 ID 列表"""
+    import re
+    ids = []
+    # 支援 Discord 網址格式 https://discord.com/channels/<guild_id>/<channel_id>
+    url_pattern = re.findall(r"discord\.com/channels/\d+/(\d+)", text)
+    if url_pattern:
+        for cid in url_pattern:
+            ids.append(int(cid))
+    
+    # 支援一般數字或逗號/空格分隔數字
+    raw_tokens = re.findall(r"\b\d{17,20}\b", text)
+    for token in raw_tokens:
+        cid = int(token)
+        if cid not in ids:
+            ids.append(cid)
+    return ids
+
 async def interactive_export():
     """互動式頻道選擇"""
     print("\n" + "=" * 50)
@@ -205,15 +227,33 @@ async def interactive_export():
         return
 
     print("\n" + "-" * 50)
-    user_input = input("👉 請輸入要抓取分析的「頻道 ID」（直接複製上方括號內的數字）: ").strip()
+    print("💡 支援直接貼上頻道網址（例如：https://discord.com/channels/.../1411976730347962509）")
+    print("💡 或輸入多個頻道 ID（以空格或逗號分隔）")
+    print("💡 若直接按 Enter，預設抓取指定的 2 個頻道 (1411976730347962509 與 898072480109965313)")
+    user_input = input("\n👉 請輸入頻道網址或 ID [直接按 Enter 抓取預設 2 個頻道]: ").strip()
 
-    if not user_input.isdigit() or int(user_input) not in channels_map:
-        print("\n[錯誤] 輸入的頻道 ID 無效或機器人無權限存取。")
+    target_ids = []
+    if not user_input:
+        target_ids = [1411976730347962509, 898072480109965313]
+    else:
+        target_ids = extract_channel_ids_from_input(user_input)
+
+    valid_channels = [channels_map[cid] for cid in target_ids if cid in channels_map]
+    missing_ids = [cid for cid in target_ids if cid not in channels_map]
+
+    if missing_ids:
+        print(f"\n⚠️ 以下頻道 ID 無法存取（機器人未加入該伺服器或無權限）：{missing_ids}")
+
+    if not valid_channels:
+        print("\n[錯誤] 沒有找到任何有效且具備權限的頻道。")
         await client.close()
         return
 
-    target_channel = channels_map[int(user_input)]
-    await process_channel_history(target_channel)
+    print(f"\n🚀 即將開始抓取 {len(valid_channels)} 個頻道...")
+    for ch in valid_channels:
+        await process_channel_history(ch)
+
+    print("\n🎉 所有指定頻道的歷史資料與圖片皆已下載完成！")
     await client.close()
 
 @client.event
