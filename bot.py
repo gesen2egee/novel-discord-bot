@@ -429,7 +429,7 @@ class BookActionView(discord.ui.View):
         elif GOOGLE_SHEET_VIEW_URL:
             # 僅推書頻道附帶查看線上書單
             self.add_item(discord.ui.Button(
-                label="📊 查看線上書單",
+                label="📊 書單",
                 url=GOOGLE_SHEET_VIEW_URL,
                 row=0
             ))
@@ -457,7 +457,7 @@ class BookActionView(discord.ui.View):
             "should_sync": should_sync
         }
 
-    @discord.ui.button(label="🔼 增加推薦", style=discord.ButtonStyle.secondary, custom_id="vote_up_btn", row=0)
+    @discord.ui.button(label="🔼 推薦", style=discord.ButtonStyle.secondary, custom_id="vote_up_btn", row=0)
     async def vote_up(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
@@ -534,7 +534,7 @@ class BookActionView(discord.ui.View):
                 concurrence=format_concurrence_text(upvoters, downvoters)
             )
 
-    @discord.ui.button(label="🔽 減少推薦", style=discord.ButtonStyle.secondary, custom_id="vote_down_btn", row=0)
+    @discord.ui.button(label="🔽 減推", style=discord.ButtonStyle.secondary, custom_id="vote_down_btn", row=0)
     async def vote_down(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         if not state:
@@ -611,7 +611,7 @@ class BookActionView(discord.ui.View):
                 concurrence=format_concurrence_text(upvoters, downvoters)
             )
 
-    @discord.ui.button(label="🗑️ 刪除書卡", style=discord.ButtonStyle.secondary, custom_id="delete_card_btn", row=0)
+    @discord.ui.button(label="🗑️ 刪除", style=discord.ButtonStyle.secondary, custom_id="delete_card_btn", row=0)
     async def delete_card(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         author_id = state["author_id"] if state else (self.original_author.id if self.original_author else None)
