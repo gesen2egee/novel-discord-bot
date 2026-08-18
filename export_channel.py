@@ -93,9 +93,16 @@ async def process_channel_history(target_channel: discord.TextChannel):
                     "url": att.url
                 })
 
+            category_name = target_channel.category.name if target_channel.category else "無分類"
+            guild_name = target_channel.guild.name if target_channel.guild else "未知伺服器"
+            channel_name = target_channel.name
+
             # 記錄訊息資訊
             msg_info = {
                 "id": str(msg.id),
+                "guild_name": guild_name,
+                "category_name": category_name,
+                "channel_name": channel_name,
                 "jump_url": msg.jump_url,
                 "time": time_str,
                 "author_name": msg.author.display_name,
@@ -155,16 +162,21 @@ async def process_channel_history(target_channel: discord.TextChannel):
     csv_path = os.path.join(output_dir, "messages.csv")
     with open(csv_path, "w", encoding="utf-8-sig", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["訊息ID", "發送時間(台北)", "發送者暱稱", "發送者ID", "文字內容", "討論跳轉連結", "圖片數量"])
+        writer.writerow(["訊息ID", "伺服器", "分類版位", "頻道名稱", "發送時間(台北)", "發送者暱稱", "發送者ID", "文字內容", "討論跳轉連結", "圖片數量", "圖片檔名"])
         for m in messages_data:
+            att_files = "; ".join([att["filename"] for att in m["attachments"]])
             writer.writerow([
                 m["id"],
+                m["guild_name"],
+                m["category_name"],
+                m["channel_name"],
                 m["time"],
                 m["author_name"],
                 m["author_id"],
                 m["content"],
                 m["jump_url"],
-                m["attachments_count"]
+                m["attachments_count"],
+                att_files
             ])
 
     print(f"📁 歷史訊息 CSV 已儲存至：{csv_path}")
