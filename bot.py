@@ -178,7 +178,30 @@ def build_book_embed(
     if downvoters is None:
         downvoters = []
 
+    # 平台簡稱對應
+    platform_map = {
+        "起點中文網": "起點",
+        "起点中文网": "起點",
+        "起點": "起點",
+        "起点": "起點",
+        "qidian": "起點",
+        "番茄小說": "番茄",
+        "番茄小说": "番茄",
+        "番茄": "番茄",
+        "fanqie": "番茄",
+        "fanqie_keyword": "番茄",
+        "刺蝟貓": "刺蝟貓",
+        "刺猬猫": "刺蝟貓",
+        "ciweimao": "刺蝟貓"
+    }
+    raw_platform = book_data.get("platform", "小說平台")
+    short_platform = platform_map.get(raw_platform, raw_platform)
+    display_title = f"{book_data['title_t']} ({short_platform})"
+
     info_lines = []
+    # 繁體書名採用 H1 特大字級超連結
+    info_lines.append(f"# 📖 [{display_title}]({book_data['url']})")
+    info_lines.append("")
     
     if book_data.get("title_s"):
         encoded_title = urllib.parse.quote_plus(book_data["title_s"])
@@ -241,28 +264,7 @@ def build_book_embed(
     if len(description_text) > 4000:
         description_text = description_text[:3990] + "\n...(簡介過長自動收合)"
 
-    # 平台簡稱對應
-    platform_map = {
-        "起點中文網": "起點",
-        "起点中文网": "起點",
-        "起點": "起點",
-        "起点": "起點",
-        "qidian": "起點",
-        "番茄小說": "番茄",
-        "番茄小说": "番茄",
-        "番茄": "番茄",
-        "fanqie": "番茄",
-        "fanqie_keyword": "番茄",
-        "刺蝟貓": "刺蝟貓",
-        "刺猬猫": "刺蝟貓",
-        "ciweimao": "刺蝟貓"
-    }
-    raw_platform = book_data.get("platform", "小說平台")
-    short_platform = platform_map.get(raw_platform, raw_platform)
-    embed_title = f"📖 {book_data['title_t']} ({short_platform})"
-
     embed = discord.Embed(
-        title=embed_title,
         url=book_data["url"],
         description=description_text,
         color=embed_color
@@ -314,18 +316,23 @@ def extract_card_state_from_message(message: discord.Message):
     down_m = re.search(r'🚫 \*\*(?:反推|不推)\*\*：([^\n\r]+)', desc)
     downvoters = [n.strip() for n in down_m.group(1).split(",") if n.strip()] if down_m else []
 
-    # 6. 書籍基本資料還原 (支援新格式: 📖 書名 (起點) 與舊格式: 📖 [起點中文網] 書名)
-    raw_title = embed.title or "書籍分享"
-    title_m = re.search(r'^📖\s*(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)$', raw_title)
-    if title_m:
-        title_clean = title_m.group(1).strip()
-        platform = title_m.group(2).strip()
+    # 6. 書籍基本資料還原 (支援: # 📖 [書名 (平台)](url) 與 embed.title 歷史格式)
+    h1_title_m = re.search(r'^#\s*📖\s*\[(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)\]', desc, re.MULTILINE)
+    if h1_title_m:
+        title_clean = h1_title_m.group(1).strip()
+        platform = h1_title_m.group(2).strip()
     else:
-        title_clean = re.sub(r'^📖\s*\[[^\]]+\]\s*', '', raw_title).strip()
-        platform = "小說平台"
-        p_m = re.search(r'^📖\s*\[([^\]]+)\]', raw_title)
-        if p_m:
-            platform = p_m.group(1)
+        raw_title = embed.title or "書籍分享"
+        title_m = re.search(r'^📖\s*(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)$', raw_title)
+        if title_m:
+            title_clean = title_m.group(1).strip()
+            platform = title_m.group(2).strip()
+        else:
+            title_clean = re.sub(r'^📖\s*\[[^\]]+\]\s*', '', raw_title).strip()
+            platform = "小說平台"
+            p_m = re.search(r'^📖\s*\[([^\]]+)\]', raw_title)
+            if p_m:
+                platform = p_m.group(1)
 
     url = embed.url or ""
     cover = embed.thumbnail.url if embed.thumbnail else None
