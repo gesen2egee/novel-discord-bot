@@ -16,11 +16,12 @@
      - 按 **`🔼 增加推薦`**：`⚠️ 不推薦` $\rightarrow$ `🌾 一般推薦（乾糧）` $\rightarrow$ `🔥 強力推薦（糧草）`
      - 按 **`🔽 減少推薦`**：`🔥 強力推薦（糧草）` $\rightarrow$ `🌾 一般推薦（乾糧）` $\rightarrow$ `⚠️ 不推薦`
    - **其他群友操作（社群覆議）**：
-     - 按 **`🔼 增加推薦`**：`🚫 反推` $\rightarrow$ `無` $\rightarrow$ `👥 同推`
-     - 按 **`🔽 減少推薦`**：`👥 同推` $\rightarrow$ `無` $\rightarrow$ `🚫 反推`
-   - 所有狀態即時更新卡片並同步至 Google 試算表第 12 欄「覆議」。
-4. **🗑️ 原發文者專屬刪除**：
-   - 只有分享該小說連結的原作者點擊 **`🗑️ 刪除書卡`** 才能撤回訊息，其他人點擊會收到隱私提示無權刪除，防止他人惡意亂刪！
+4. **🗑️ 原發文者專屬刪除 ＆ 雙重刪除選項**：
+   - 只有分享該小說連結的原作者點擊 **`🗑️ 刪除書卡`** 時，會彈出專屬私密確認面板（Ephemeral）：
+     - **`🗑️ 僅刪除 Discord 書卡`**：只撤回 Discord 訊息，保留線上書單紀錄。
+     - **`🧹 同時從線上書單刪除`**：撤回 Discord 訊息並發送 Webhook 刪除指令，將該小說由 Google 試算表中整行移除！
+     - **`❌ 取消`**：取消刪除操作。
+   - 其他人點擊會收到隱私提示無權刪除，防止他人惡意亂刪！
 5. **📊 Google 試算表自動同步與去重**：
    - 每次推書自動同步 Google 表格，支援智慧去重與推薦人累加。
    - 支援台北時間純日期（`YYYY/MM/DD`）。
@@ -44,7 +45,7 @@
 在第 1 列依序填入 12 個欄位標題：
 `推薦時間` ｜ `繁體書名` ｜ `簡體原名` ｜ `推薦人` ｜ `平台` ｜ `作者` ｜ `小說網址` ｜ `DC討論原文` ｜ `是否推薦` ｜ `字數/數據` ｜ `標籤` ｜ `覆議`
 
-### 步驟 2：貼上 Google Apps Script 腳本 (支援覆議與社群同推)
+### 步驟 2：貼上 Google Apps Script 腳本 (支援覆議、同推與整列刪除)
 1. 點擊頂部選單的 **「擴充功能」 $\rightarrow$ 「Apps Script」**。
 2. 清空裡面的程式碼，完整貼上以下腳本：
 
@@ -59,8 +60,26 @@ function doPost(e) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheets()[0];
     var data = JSON.parse(e.postData.contents);
-    
     var values = sheet.getDataRange().getValues();
+
+    // 0. 處理刪除請求 (Action: delete)
+    if (data.action === "delete") {
+      var targetUrl = data.url ? data.url.trim().toLowerCase() : "";
+      var targetTitle = data.title_t ? data.title_t.trim() : "";
+      var deleted = false;
+
+      for (var i = values.length - 1; i >= 1; i--) {
+        var rowUrl = values[i][6] ? values[i][6].toString().trim().toLowerCase() : "";
+        var rowTitle = values[i][1] ? values[i][1].toString().trim() : "";
+        if ((targetUrl && rowUrl === targetUrl) || (targetTitle && rowTitle === targetTitle)) {
+          sheet.deleteRow(i + 1);
+          deleted = true;
+        }
+      }
+      return ContentService.createTextOutput(JSON.stringify({"status": "deleted", "deleted": deleted}))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    
     var existingRowIndex = -1;
     
     // 1. 去重比對：檢查第 7 欄 (小說網址) 或第 2 欄 (繁體書名)

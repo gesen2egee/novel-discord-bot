@@ -13,7 +13,7 @@ from cachetools import TTLCache
 
 from normalizer import normalize_novel_url
 from resolver import fetch_novel_info
-from sheets_sync import sync_to_google_sheet
+from sheets_sync import sync_to_google_sheet, delete_from_google_sheet
 
 # 載入環境變數
 load_dotenv()
@@ -565,13 +565,82 @@ class BookActionView(discord.ui.View):
     async def delete_card(self, interaction: discord.Interaction, button: discord.ui.Button):
         state = self._restore_state_if_needed(interaction)
         author_id = state["author_id"] if state else (self.original_author.id if self.original_author else None)
+        book_data = state["book_data"] if state else self.book_data
 
         # 僅原發文者有權刪除書卡
         if author_id is not None and interaction.user.id != author_id:
             await interaction.response.send_message("❌ 只有發布此網址的原作者才可以刪除這張書卡喔！", ephemeral=True)
             return
 
-        await interaction.message.delete()
+        # 彈出發文者專屬私密確認選單
+        confirm_view = DeleteConfirmView(
+            target_message=interaction.message,
+            book_data=book_data,
+            author_id=author_id
+        )
+        await interaction.response.send_message(
+            content="⚠️ **確定要刪除這張書卡嗎？**\n請選擇您希望的刪除方式：",
+            view=confirm_view,
+            ephemeral=True
+        )
+
+class DeleteConfirmView(discord.ui.View):
+    """
+    發書者刪除書卡時的私密確認面板 (Ephemeral)
+    提供「僅刪除 Discord 書卡」與「同時從線上書單刪除」兩種選項
+    """
+    def __init__(self, target_message: discord.Message, book_data: dict, author_id: int):
+        super().__init__(timeout=60)
+        self.target_message = target_message
+        self.book_data = book_data
+        self.author_id = author_id
+
+    @discord.ui.button(label="🗑️ 僅刪除 Discord 書卡", style=discord.ButtonStyle.secondary, custom_id="delete_msg_only")
+    async def delete_msg_only(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ 只有發布此網址的原作者才可以操作喔！", ephemeral=True)
+            return
+
+        try:
+            await self.target_message.delete()
+        except Exception:
+            pass
+
+        await interaction.response.edit_message(content="✅ 已成功刪除 Discord 上的書卡訊息！", view=None)
+
+    @discord.ui.button(label="🧹 同時從線上書單刪除", style=discord.ButtonStyle.danger, custom_id="delete_msg_and_sheet")
+    async def delete_msg_and_sheet(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("❌ 只有發布此網址的原作者才可以操作喔！", ephemeral=True)
+            return
+
+        # 1. 刪除 Discord 訊息
+        try:
+            await self.target_message.delete()
+        except Exception:
+            pass
+
+        # 2. 同步從 Google 試算表刪除
+        if GOOGLE_SHEET_WEBHOOK_URL and self.book_data:
+            await delete_from_google_sheet(
+                GOOGLE_SHEET_WEBHOOK_URL,
+                novel_url=self.book_data.get("url", ""),
+                title_t=self.book_data.get("title_t", "")
+            )
+
+        # 3. 從推薦歷史與快取中移除
+        if self.book_data:
+            norm_res = await normalize_novel_url(self.book_data.get("url", ""))
+            if norm_res:
+                k = f"{norm_res[0]}:{norm_res[2]}"
+                recommend_history.pop(k, None)
+                cache.pop(k, None)
+
+        await interaction.response.edit_message(content="✅ 已成功刪除 Discord 書卡，並同步從 Google 線上書單中移除！", view=None)
+
+    @discord.ui.button(label="❌ 取消", style=discord.ButtonStyle.secondary, custom_id="cancel_delete")
+    async def cancel_delete(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(content="已取消刪除操作。", view=None)
 
 class CyberHoundView(discord.ui.View):
     """持久化賽博獵犬通知按鈕 (Persistent View)"""
