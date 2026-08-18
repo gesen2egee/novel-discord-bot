@@ -218,7 +218,23 @@ def build_book_embed(
 
     info_lines.append("")
     info_lines.append("### 📝 **作品簡介**")
-    info_lines.append(book_data.get("description", "暫無簡介"))
+    raw_desc = book_data.get("description", "暫無簡介").strip()
+    if raw_desc:
+        desc_paragraphs = raw_desc.split("\n")
+        formatted_paragraphs = []
+        for p in desc_paragraphs:
+            p_str = p.strip()
+            if not p_str:
+                formatted_paragraphs.append("")
+            elif p_str.startswith("### ") or p_str.startswith("## ") or p_str.startswith("# "):
+                formatted_paragraphs.append(p_str)
+            elif p_str in ["---", "——", "***", "···"]:
+                formatted_paragraphs.append(p_str)
+            else:
+                formatted_paragraphs.append(f"### {p_str}")
+        info_lines.append("\n".join(formatted_paragraphs))
+    else:
+        info_lines.append("### 暫無簡介")
 
     description_text = "\n".join(info_lines)
 
@@ -327,7 +343,9 @@ def extract_card_state_from_message(message: discord.Message):
     tags = tags_m.group(1).strip() if tags_m else "作品標籤"
 
     desc_split = re.split(r'(?:###\s*)?📝 \*\*?(?:完整)?作品簡介\*\*?：?', desc)
-    book_desc = desc_split[1].strip() if len(desc_split) > 1 else ""
+    raw_extracted_desc = desc_split[1].strip() if len(desc_split) > 1 else ""
+    clean_desc_lines = [re.sub(r'^###\s+', '', l) for l in raw_extracted_desc.split("\n")]
+    book_desc = "\n".join(clean_desc_lines).strip()
 
     book_data = {
         "platform": platform,
