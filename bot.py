@@ -843,13 +843,11 @@ async def scan_history_error(ctx: commands.Context, error):
 # -----------------------------------------------------------
 
 def is_valid_book_data(data: dict) -> bool:
-    """檢查抓取的小說資料是否完整有效 (書名不可空白或站名，作者不可未知)"""
+    """檢查抓取的小說資料是否完整有效 (書名不可空白或通用站名)"""
     if not data or not isinstance(data, dict):
         return False
     title = data.get("title_t", "").strip()
     if not title or title in ["起点中文网", "起點中文網", "番茄小說", "番茄小说", "刺蝟貓", "刺猬猫", "小說平台", "全部分类"]:
-        return False
-    if data.get("author") in ["未知作者", "未知", ""]:
         return False
     return True
 

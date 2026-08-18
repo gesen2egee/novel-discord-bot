@@ -178,9 +178,15 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                             if len(parts) > 1:
                                 author = parts[1].strip()
 
-                    author_m = re.search(r'([^\s\n\r/]+)\s*/\s*著|作者[：:\s]+([^\s\n\r]+)', content)
+                    author_m = re.search(
+                        r'!\[Image\s*\d*:[^\]]*?作者\s*([^\s\n\r\]]+)\]|'
+                        r'([^\s\n\r/]+)\s*/\s*著|'
+                        r'作者[：:\s]+([^\s\n\r]+)|'
+                        r'!\[Image[^\]]*\]\([^\)]+\)\[([^\]\n\r]+)\]\(https?://(?:fanqienovel\.com|www\.changdunovel\.com)/page/',
+                        content
+                    )
                     if author_m:
-                        author = (author_m.group(1) or author_m.group(2)).strip()
+                        author = (author_m.group(1) or author_m.group(2) or author_m.group(3) or author_m.group(4)).strip()
 
                     word_match = re.search(r'(\d+(?:\.\d+)?\s*(?:萬|万)?\s*字)', content)
                     read_match = re.search(r'(\d+(?:\.\d+)?\s*(?:萬|万)?\s*人在[讀读])', content)
