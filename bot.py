@@ -199,8 +199,8 @@ def build_book_embed(
     display_title = f"{book_data['title_t']} ({short_platform})"
 
     info_lines = []
-    # 繁體書名採用 H1 特大字級超連結
-    info_lines.append(f"# 📖 [{display_title}]({book_data['url']})")
+    # 繁體書名採用 H3 大字級超連結 (與作品簡介大小一致)
+    info_lines.append(f"### 📖 [{display_title}]({book_data['url']})")
     info_lines.append("")
     
     if book_data.get("title_s"):
@@ -316,11 +316,11 @@ def extract_card_state_from_message(message: discord.Message):
     down_m = re.search(r'🚫 \*\*(?:反推|不推)\*\*：([^\n\r]+)', desc)
     downvoters = [n.strip() for n in down_m.group(1).split(",") if n.strip()] if down_m else []
 
-    # 6. 書籍基本資料還原 (支援: # 📖 [書名 (平台)](url) 與 embed.title 歷史格式)
-    h1_title_m = re.search(r'^#\s*📖\s*\[(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)\]', desc, re.MULTILINE)
-    if h1_title_m:
-        title_clean = h1_title_m.group(1).strip()
-        platform = h1_title_m.group(2).strip()
+    # 6. 書籍基本資料還原 (支援: ### 📖 [書名 (平台)](url)、# 📖 與 embed.title 歷史格式)
+    h_title_m = re.search(r'^(?:###|#)\s*📖\s*\[(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)\]', desc, re.MULTILINE)
+    if h_title_m:
+        title_clean = h_title_m.group(1).strip()
+        platform = h_title_m.group(2).strip()
     else:
         raw_title = embed.title or "書籍分享"
         title_m = re.search(r'^📖\s*(.+?)\s*\((起點|番茄|刺蝟貓|[^\)]+)\)$', raw_title)
