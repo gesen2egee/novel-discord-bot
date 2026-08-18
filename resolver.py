@@ -16,16 +16,21 @@ PLATFORM_NAMES = {
 }
 
 def clean_text(text: str) -> str:
-    """清理多餘的連續空白、換行與無效的 Markdown 連結"""
+    """清理多餘的連續空白、換行、章節目錄連結與雜訊"""
     if not text:
         return ""
     # 過濾 javascript: 虛擬連結與按鈕標籤
     text = re.sub(r'\[?(?:作品[簡简]介|作品[信資]息|立即[閱阅][讀读]|放入[書书]架|訂閱|订阅)\]?\(javascript:[^\)]*\)', '', text)
     text = re.sub(r'\[?(?:\[\s*\]|\(\s*\))', '', text)
+    # 若包含目錄標題或章節列表，直接於起始處截斷
+    text = re.split(r'\n+#+\s*(?:目录|目錄|最新章节|第一卷)|(?:\n+|^)\s*\[?第\s*\d+\s*章', text, maxsplit=1)[0]
     # 過濾開頭的項目符號留白
     text = re.sub(r'^\s*[\*•\-]\s*\n', '', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
+    cleaned = text.strip()
+    if len(cleaned) > 500:
+        cleaned = cleaned[:490] + "..."
+    return cleaned
 
 def clean_tags(raw_text: str) -> str:
     """
@@ -204,7 +209,11 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
                     else:
                         tags = "都市・穿越・連載中"
 
-                    desc_m = re.search(r'(?:\[下载番茄小说\][^\n]*\n+|简介[：:\s]*\n+)(.*?)(?:\n+男频|\n+女频|\n+目录|\n+目錄|\n+正序|\Z)', content, re.DOTALL)
+                    desc_m = re.search(
+                        r'(?:##\s*作品[簡简]介\s*\n+|简介[：:\s]*\n+)(.*?)(?:\n+#+\s*|\n+男频|\n+女频|\n+目录|\n+目錄|\n+正序|\n+倒序|\n+第一卷|\Z)',
+                        content,
+                        re.DOTALL
+                    )
                     if desc_m:
                         description = desc_m.group(1).strip()
                     else:
