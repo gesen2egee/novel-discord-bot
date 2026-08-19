@@ -967,8 +967,28 @@ async def main():
         print("[錯誤] 請先在環境變數中設定您的 DISCORD_TOKEN！")
         return
     await start_web_server()
-    async with bot:
-        await bot.start(DISCORD_TOKEN)
+    
+    while True:
+        try:
+            await bot.start(DISCORD_TOKEN)
+        except discord.HTTPException as e:
+            if e.status == 429 or "429" in str(e):
+                print(f"⚠️ [Discord IP 限流] 偵測到暫時的 Cloudflare/Discord 429 限流 (Error 1015)，安全等待 60 秒後自動重新嘗試...")
+                await asyncio.sleep(60)
+            else:
+                print(f"⚠️ [Discord HTTP 異常] {e}，20 秒後重試...")
+                await asyncio.sleep(20)
+        except (discord.ConnectionClosed, aiohttp.ClientError, asyncio.TimeoutError) as e:
+            print(f"⚠️ [Discord 網路波動中斷] 10 秒後自動重新連線... (原因: {e})")
+            await asyncio.sleep(10)
+        except Exception as e:
+            print(f"⚠️ [Discord 未預期例外] 15 秒後自動重試... (原因: {e})")
+            await asyncio.sleep(15)
+        finally:
+            if not bot.is_closed():
+                await bot.close()
+            # 重置 HTTPClient 供下次重試使用
+            bot.http = discord.http.HTTPClient(loop=bot.loop)
 
 if __name__ == "__main__":
     asyncio.run(main())
