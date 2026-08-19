@@ -967,16 +967,8 @@ async def main():
         print("[錯誤] 請先在環境變數中設定您的 DISCORD_TOKEN！")
         return
     await start_web_server()
-    
-    while True:
-        try:
-            await bot.start(DISCORD_TOKEN)
-        except (discord.ConnectionClosed, aiohttp.ClientError, asyncio.TimeoutError) as e:
-            print(f"⚠️ [Discord 連線中斷] 5 秒後自動嘗試重新連線... (原因: {e})")
-            await asyncio.sleep(5)
-        except Exception as e:
-            print(f"⚠️ [Discord 發生例外] 10 秒後自動重試... (原因: {e})")
-            await asyncio.sleep(10)
+    async with bot:
+        await bot.start(DISCORD_TOKEN)
 
 if __name__ == "__main__":
     asyncio.run(main())
