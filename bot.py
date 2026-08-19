@@ -727,9 +727,9 @@ class CyberHoundView(discord.ui.View):
 
         await interaction.message.delete()
 
-@tasks.loop(seconds=60)
+@tasks.loop(minutes=30)
 async def auto_sync_sheet_task():
-    """背景每 60 秒自動同步一次 Google 試算表最新推書資料"""
+    """背景每 30 分鐘自動同步一次 Google 試算表最新推書資料（防止短時間高頻重複請求導致連線阻塞）"""
     await load_history_from_google_sheet()
 
 @auto_sync_sheet_task.before_loop
@@ -752,12 +752,13 @@ async def on_ready():
     print(f" 展開書卡：所有文字頻道均會展開")
     print(f" 試算表同步頻道：已設定為 [{SYNC_CHANNELS}]")
     print(f" 持久化按鈕：已全域掛載 (重啟後歷史按鈕永久有效)")
+    print(f" 背景排程：每 30 分鐘定時同步試算表")
     print(f"==================================================")
     
     # 啟動時自動從 Google 試算表載入歷史資料至獵犬庫
     await load_history_from_google_sheet()
 
-    # 啟動背景定期每分鐘同步 Google 試算表任務
+    # 啟動背景定期每 30 分鐘同步 Google 試算表任務
     if not auto_sync_sheet_task.is_running():
         auto_sync_sheet_task.start()
     
@@ -966,7 +967,16 @@ async def main():
         print("[錯誤] 請先在環境變數中設定您的 DISCORD_TOKEN！")
         return
     await start_web_server()
-    await bot.start(DISCORD_TOKEN)
+    
+    while True:
+        try:
+            await bot.start(DISCORD_TOKEN)
+        except (discord.ConnectionClosed, aiohttp.ClientError, asyncio.TimeoutError) as e:
+            print(f"⚠️ [Discord 連線中斷] 5 秒後自動嘗試重新連線... (原因: {e})")
+            await asyncio.sleep(5)
+        except Exception as e:
+            print(f"⚠️ [Discord 發生例外] 10 秒後自動重試... (原因: {e})")
+            await asyncio.sleep(10)
 
 if __name__ == "__main__":
     asyncio.run(main())

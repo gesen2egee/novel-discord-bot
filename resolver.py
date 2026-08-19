@@ -79,7 +79,14 @@ async def fetch_novel_info(platform: str, normalized_url: str, jina_api_key: Opt
     透過雲端 Reader API (r.jina.ai) 取得小說書籍結構化資料。
     免本地 HTML 爬蟲、高強健性正則提取作者、字數、標籤與 100% 純淨真實簡介。
     """
-    jina_endpoint = f"https://r.jina.ai/{normalized_url}"
+    fetch_url = normalized_url
+    if platform == "qidian":
+        # 轉換為高相容性起點詳情端點，避開反爬盾牌
+        book_id_m = re.search(r'/(?:book|info)/(\d+)', normalized_url)
+        if book_id_m:
+            fetch_url = f"https://book.qidian.com/info/{book_id_m.group(1)}/"
+
+    jina_endpoint = f"https://r.jina.ai/{fetch_url}"
     headers = {
         "Accept": "application/json",
         "X-No-Cache": "false"
